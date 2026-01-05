@@ -492,6 +492,20 @@ func TestCollaboratorPermission(t *testing.T) {
 func TestRepositoryCollaborators(t *testing.T) {
 	rp := &ResponsePlayer{}
 	rp.AddRule(
+		PathAndQueryMatcher{
+			Path:  "/repos/testorg/testrepo/collaborators",
+			Query: url.Values{"affiliation": []string{"direct"}, "per_page": []string{"100"}},
+		},
+		"testdata/responses/repo_collaborators_direct.yml",
+	)
+	rp.AddRule(
+		PathAndQueryMatcher{
+			Path:  "/repos/testorg/testrepo/collaborators",
+			Query: url.Values{"affiliation": []string{"all"}, "per_page": []string{"100"}},
+		},
+		"testdata/responses/repo_collaborators_all.yml",
+	)
+	rp.AddRule(
 		ExactPathMatcher("/repos/testorg/testrepo/teams"),
 		"testdata/responses/repo_teams.yml",
 	)
@@ -503,14 +517,10 @@ func TestRepositoryCollaborators(t *testing.T) {
 		ExactPathMatcher("/orgs/testorg/teams/admins/members"),
 		"testdata/responses/repo_team_members_admins.yml",
 	)
-	rp.AddRule(
-		GraphQLNodePrefixMatcher("repository.collaborators"),
-		"testdata/responses/repo_collaborators.yml",
-	)
 
 	ctx := makeContext(t, rp, nil, nil)
 
-	collaborators, err := ctx.RepositoryCollaborators()
+	collaborators, err := ctx.RepositoryCollaborators(PermissionNone)
 	require.NoError(t, err)
 
 	require.Len(t, collaborators, 8, "incorrect number of collaborators")
