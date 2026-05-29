@@ -30,7 +30,11 @@ func TestShouldSkipWorkflowRun(t *testing.T) {
 		owner          = "testorg"
 		repo           = "testrepo"
 		baseBranch     = "main"
-		workflowName   = "CI"
+		// `has_workflow_result.workflows` policy entries are workflow file
+		// paths (e.g. ".github/workflows/ci.yml"), not display names. The
+		// pre-check must compare paths to paths.
+		workflowPath        = ".github/workflows/ci.yml"
+		workflowDisplayName = "CI"
 	)
 
 	newHandler := func(loader mockConfigLoader) *WorkflowRun {
@@ -45,10 +49,10 @@ func TestShouldSkipWorkflowRun(t *testing.T) {
 		}
 	}
 
-	t.Run("returns false for empty workflowName", func(t *testing.T) {
+	t.Run("returns false for empty workflowPath", func(t *testing.T) {
 		h := newHandler(mockConfigLoader{
 			loadConfig: func(_ context.Context, _ *github.Client, _, _, _ string) (appconfig.Config, error) {
-				t.Fatal("loader should not be called when workflowName is empty")
+				t.Fatal("loader should not be called when workflowPath is empty")
 				return appconfig.Config{}, nil
 			},
 		})
@@ -62,7 +66,7 @@ func TestShouldSkipWorkflowRun(t *testing.T) {
 				return appconfig.Config{}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, "", workflowName))
+		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, "", workflowPath))
 	})
 
 	t.Run("returns true when repo has no policy file (Config==nil)", func(t *testing.T) {
@@ -71,7 +75,7 @@ func TestShouldSkipWorkflowRun(t *testing.T) {
 				return appconfig.Config{}, nil
 			},
 		})
-		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowName))
+		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
 	})
 
 	t.Run("returns true when policy has no has_workflow_result blocks", func(t *testing.T) {
@@ -96,10 +100,10 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowName))
+		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
 	})
 
-	t.Run("returns true when workflow name is not in policy's workflow list", func(t *testing.T) {
+	t.Run("returns true when workflow path is not in policy's workflow list", func(t *testing.T) {
 		h := newHandler(mockConfigLoader{
 			loadConfig: func(_ context.Context, _ *github.Client, _, _, _ string) (appconfig.Config, error) {
 				return appconfig.Config{
@@ -112,7 +116,7 @@ approval_rules:
     if:
       has_workflow_result:
         workflows:
-          - "Deploy"
+          - ".github/workflows/deploy.yml"
     requires:
       count: 0
 `),
@@ -121,10 +125,10 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, "Unrelated Workflow"))
+		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, ".github/workflows/unrelated.yml"))
 	})
 
-	t.Run("returns false when workflow name IS in policy's workflow list", func(t *testing.T) {
+	t.Run("returns false when workflow path IS in policy's workflow list", func(t *testing.T) {
 		h := newHandler(mockConfigLoader{
 			loadConfig: func(_ context.Context, _ *github.Client, _, _, _ string) (appconfig.Config, error) {
 				return appconfig.Config{
@@ -137,7 +141,7 @@ approval_rules:
     if:
       has_workflow_result:
         workflows:
-          - "CI"
+          - ".github/workflows/ci.yml"
     requires:
       count: 0
 `),
@@ -146,7 +150,40 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowName))
+		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
+	})
+
+	// Regression for the path-vs-name mismatch caught on PR #2: confirm that
+	// passing the display name instead of the path does NOT match a
+	// policy entry that lists the path. This guards against a future
+	// refactor accidentally going back to GetName().
+	t.Run("returns true when caller passes display name instead of path (path-only matching)", func(t *testing.T) {
+		h := newHandler(mockConfigLoader{
+			loadConfig: func(_ context.Context, _ *github.Client, _, _, _ string) (appconfig.Config, error) {
+				return appconfig.Config{
+					Content: []byte(`
+policy:
+  approval:
+    - rule1
+approval_rules:
+  - name: rule1
+    if:
+      has_workflow_result:
+        workflows:
+          - ".github/workflows/ci.yml"
+    requires:
+      count: 0
+`),
+					Source: "testorg/testrepo@main",
+					Path:   ".policy.yml",
+				}, nil
+			},
+		})
+		// The display name "CI" does NOT equal the path
+		// ".github/workflows/ci.yml" in the policy, so the function returns
+		// true (skip). In production the handler must pass the PATH, not
+		// this display name — that's enforced by the Handle method.
+		assert.True(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowDisplayName))
 	})
 
 	t.Run("returns false on LoadError (fail open)", func(t *testing.T) {
@@ -158,7 +195,7 @@ approval_rules:
 				}, errors.New("transient github failure")
 			},
 		})
-		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowName))
+		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
 	})
 
 	t.Run("returns false on ParseError (fail open)", func(t *testing.T) {
@@ -171,7 +208,7 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowName))
+		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
 	})
 
 	t.Run("returns false when client creation fails (fail open)", func(t *testing.T) {
@@ -189,6 +226,6 @@ approval_rules:
 				},
 			},
 		}
-		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowName))
+		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
 	})
 }

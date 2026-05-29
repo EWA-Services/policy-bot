@@ -47,8 +47,15 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 	repoID := repo.GetID()
 	ownerName := repo.GetOwner().GetLogin()
 	repoName := repo.GetName()
-	workflowName := event.GetWorkflowRun().GetName()
-	commitSHA := event.GetWorkflowRun().GetHeadSHA()
+	workflowRun := event.GetWorkflowRun()
+	// `has_workflow_result.workflows` is matched against workflow file paths
+	// (e.g. `.github/workflows/ci.yml`), not display names. Use the path
+	// here so the pre-check agrees with the evaluator's keying in
+	// `LatestWorkflowRuns()` / `pull/github.go`. GetPath() can be empty on
+	// odd webhook payloads — shouldSkipWorkflowRun fails open in that case.
+	workflowPath := workflowRun.GetPath()
+	workflowName := workflowRun.GetName()
+	commitSHA := workflowRun.GetHeadSHA()
 	installationID := githubapp.GetInstallationIDFromEvent(&event)
 
 	ctx, logger := githubapp.PrepareRepoContext(ctx, installationID, repo)
@@ -70,12 +77,13 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 		// Cheap pre-check: skip the full evaluation when the policy on the
 		// PR's base branch cannot possibly be affected by this workflow_run.
 		// Covers three known-terminal cases: no `.policy.yml` at all,
-		// policy has no `has_workflow_result` blocks, or the workflow name
+		// policy has no `has_workflow_result` blocks, or the workflow path
 		// isn't listed. Each skip saves 3-5 GitHub API calls. Fails open
 		// in every uncertain case (load/parse error, empty identifiers).
 		baseBranch := pr.GetBase().GetRef()
-		if h.shouldSkipWorkflowRun(ctx, installationID, ownerName, repoName, baseBranch, workflowName) {
+		if h.shouldSkipWorkflowRun(ctx, installationID, ownerName, repoName, baseBranch, workflowPath) {
 			logger.Info().
+				Str("workflow_path", workflowPath).
 				Str("workflow_name", workflowName).
 				Str("base_branch", baseBranch).
 				Int("pr_number", pr.GetNumber()).
@@ -101,7 +109,7 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 }
 
 // shouldSkipWorkflowRun returns true when we are confident that the policy on
-// baseBranch cannot be affected by a workflow_run with the given name. Three
+// baseBranch cannot be affected by a workflow_run with the given path. Three
 // known-terminal cases warrant a skip:
 //
 //   - The repo has no `.policy.yml` at all (`Config == nil`). PolicyBot has
@@ -112,13 +120,19 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 //     anywhere (`hasAny == false`). No workflow_run event can change its
 //     outcome.
 //   - The policy contains `has_workflow_result` blocks, but none reference
-//     this event's workflow name.
+//     this event's workflow path.
 //
 // Returns false (fall-through to the full evaluation) for uncertain cases:
 // policy fetch failed, policy parse failed, or required identifiers are
 // empty. Never silently drops a relevant event.
-func (h *WorkflowRun) shouldSkipWorkflowRun(ctx context.Context, installationID int64, owner, repo, baseBranch, workflowName string) bool {
-	if baseBranch == "" || workflowName == "" {
+//
+// workflowPath is the workflow file path (e.g. `.github/workflows/ci.yml`)
+// from the webhook, NOT the human-readable display name. The evaluator
+// keys `LatestWorkflowRuns()` by path and matches policy entries against
+// the same path; comparing display names against path-shaped policy
+// entries would silently skip every relevant event.
+func (h *WorkflowRun) shouldSkipWorkflowRun(ctx context.Context, installationID int64, owner, repo, baseBranch, workflowPath string) bool {
+	if baseBranch == "" || workflowPath == "" {
 		return false
 	}
 
@@ -136,13 +150,13 @@ func (h *WorkflowRun) shouldSkipWorkflowRun(ctx context.Context, installationID 
 		return true
 	}
 
-	names, hasAny := policyWorkflowNames(fetched.Config)
+	paths, hasAny := policyWorkflowNames(fetched.Config)
 	if !hasAny {
 		// Policy exists but has no workflow predicates anywhere. No
 		// workflow_run event can possibly change its outcome, skip.
 		return true
 	}
 
-	_, listed := names[workflowName]
+	_, listed := paths[workflowPath]
 	return !listed
 }
