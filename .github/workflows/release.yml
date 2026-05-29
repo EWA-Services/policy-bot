@@ -2,7 +2,7 @@ name: Release
 on:
   push:
     branches:
-      - main
+      - develop
 permissions:
   contents: write
   pull-requests: write
@@ -45,7 +45,7 @@ jobs:
             git fetch origin
             git checkout "$PR_BRANCH"
 
-            BASE_COMMIT=$(git merge-base main HEAD)
+            BASE_COMMIT=$(git merge-base develop HEAD)
 
             export GIT_SEQUENCE_EDITOR=':'
             git rebase -i --committer-date-is-author-date \
