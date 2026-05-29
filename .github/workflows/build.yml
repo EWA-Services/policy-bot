@@ -2,7 +2,6 @@ name: Build
 
 on:
   push:
-    branches: [develop]
     tags-ignore:
       - '**'
 
@@ -114,24 +113,11 @@ jobs:
     # Include them here to avoid exporting the Docker container as an artifact
     #
 
-    - name: Login to Docker Hub
-      if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
-      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-    - name: Push snapshot image to Docker Hub
-      if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
-      run: ./godelw docker push --tags=snapshot
-
-    - name: Push release image to Docker Hub
-      if: ${{ github.event_name == 'release' }}
-      run: ./godelw docker push --tags=latest,version
-
     - name: Publish release assets
       if: ${{ github.event_name == 'release' }}
-      run: ./godelw publish github --add-v-prefix --api-url=${GITHUB_API_URL} --user=palantir --repository=policy-bot --token=${{ secrets.GITHUB_TOKEN }}
+      run: |
+        repo_name="${GITHUB_REPOSITORY#*/}"
+        ./godelw publish github --add-v-prefix --api-url="${GITHUB_API_URL}" --user="${GITHUB_REPOSITORY_OWNER}" --repository="${repo_name}" --token="${{ secrets.GITHUB_TOKEN }}"
 
   ci-all:
     runs-on: ubuntu-latest

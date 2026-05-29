@@ -15,7 +15,7 @@
 package version
 
 var (
-	version = "develop"
+	version = "dev"
 )
 
 func GetVersion() string {

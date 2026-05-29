@@ -1,0 +1,47 @@
+FROM node:20-bookworm AS frontend
+
+WORKDIR /app
+
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile
+
+COPY . .
+RUN yarn run build:production
+
+FROM golang:1.26-bookworm AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w -X github.com/palantir/policy-bot/version.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
+    -o /policy-bot .
+
+FROM scratch
+
+STOPSIGNAL SIGINT
+
+# TLS certificates for HTTPS calls
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# mime types for static file serving
+COPY docker/mime.types /etc/
+
+# Default configuration
+COPY config/policy-bot.example.yml /secrets/policy-bot.yml
+
+# HTML templates
+COPY server/templates /templates
+
+# Frontend assets (CSS/JS)
+COPY --from=frontend /app/build/static /static
+
+# Application binary
+COPY --from=builder /policy-bot /policy-bot
+
+ENTRYPOINT ["/policy-bot"]
+CMD ["server", "--config", "/secrets/policy-bot.yml"]
