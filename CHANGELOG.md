@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.41.2-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.1-finn.1...v1.41.2-finn.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* **handlers:** use workflow path, not display name, for workflow_run skip [DEV-2709] ([a4e58bb](https://github.com/EWA-Services/policy-bot/commit/a4e58bb9f1f2a560fff5b6b6f52caa608506cc27))
+* **handlers:** use workflow path, not display name, for workflow_run skip [DEV-2709] ([455f01f](https://github.com/EWA-Services/policy-bot/commit/455f01feb1c924cfdcf5b99dcc4ea0c365b379b5))
+
 ## [1.41.1-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.1...v1.41.1-finn.1) (2026-05-29)
 
 
