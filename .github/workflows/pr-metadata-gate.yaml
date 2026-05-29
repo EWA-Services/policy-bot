@@ -1,0 +1,838 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: PR Metadata Gate
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - ready_for_review
+      - synchronize
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+env:
+  AI_REVIEW_PATTERNS: "[\"##\\s*Code Review Summary\",\"Review performed by Claude\",\"Codex Review\",\"^\\*\\*Claude finished @\"]"
+  AI_REVIEW_ACTOR_PATTERNS: "[\"^blocks$\",\"^blocksorg$\",\"^blocks\\[bot\\]$\"]"
+
+jobs:
+  metadata-quality:
+    name: Validate PR metadata with Claude
+    runs-on: finn-runners
+    if: ${{ github.actor != 'finn-devops' }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Determine trigger context
+        id: determine
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action || '' }}
+          PR_NUMBER_PR: ${{ github.event.pull_request.number || '' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || '' }}
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.html_url || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+          REVIEW_BODY: ${{ github.event.review.body || '' }}
+          REPO_FULL: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 <<'PY' > context.json
+          import json, os, re, urllib.error, urllib.request
+
+          event = os.environ["EVENT_NAME"]
+          action = os.environ.get("EVENT_ACTION") or ""
+          pr_number = os.environ.get("PR_NUMBER_PR") or ""
+          pr_author = (os.environ.get("PR_AUTHOR") or "").strip()
+          issue_number = os.environ.get("ISSUE_NUMBER") or ""
+          issue_pr_url = os.environ.get("ISSUE_PR_URL") or ""
+          comment_body = os.environ.get("COMMENT_BODY") or ""
+          comment_author = (os.environ.get("COMMENT_AUTHOR") or "").strip()
+          review_body = os.environ.get("REVIEW_BODY") or ""
+          repo_full = os.environ.get("REPO_FULL") or ""
+          repo_owner = os.environ.get("REPO_OWNER") or ""
+          gh_token = os.environ.get("GH_TOKEN") or ""
+
+          default_patterns = [
+              r"##\s*Code Review Summary",
+              r"Review performed by Claude",
+              r"Codex Review",
+          ]
+          default_actor_patterns = [
+              r"^blocks$",
+              r"^blocksorg$",
+              r"^blocks\[bot\]$",
+          ]
+          actor_review_markers = [
+              r"Review posted on PR",
+              r"What I checked",
+              r"Inline comments added",
+          ]
+          try:
+              parsed_patterns = json.loads(os.environ.get("AI_REVIEW_PATTERNS") or "[]")
+              patterns = parsed_patterns if isinstance(parsed_patterns, list) and parsed_patterns else default_patterns
+          except json.JSONDecodeError:
+              patterns = default_patterns
+          try:
+              parsed_actor_patterns = json.loads(os.environ.get("AI_REVIEW_ACTOR_PATTERNS") or "[]")
+              actor_patterns = (
+                  parsed_actor_patterns
+                  if isinstance(parsed_actor_patterns, list) and parsed_actor_patterns
+                  else default_actor_patterns
+              )
+          except json.JSONDecodeError:
+              actor_patterns = default_actor_patterns
+
+          def matches(text: str) -> bool:
+              return any(re.search(pattern, text or "", re.IGNORECASE) for pattern in patterns)
+
+          def matches_actor(actor: str) -> bool:
+              return any(re.search(pattern, actor or "", re.IGNORECASE) for pattern in actor_patterns)
+
+          def matches_actor_review(actor: str, text: str) -> bool:
+              if not matches_actor(actor):
+                  return False
+              return any(re.search(marker, text or "", re.IGNORECASE) for marker in actor_review_markers)
+
+          # Fetch PR author and head repo owner in one call to avoid duplicate API requests.
+          def fetch_pr_details(repo: str, number: str) -> tuple[str, str]:
+              if not repo or not number:
+                  return ("", "")
+              url = f"https://api.github.com/repos/{repo}/pulls/{number}"
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "User-Agent": "metadata-gate",
+                  },
+              )
+              if gh_token:
+                  request.add_header("Authorization", f"Bearer {gh_token}")
+              try:
+                  with urllib.request.urlopen(request, timeout=10) as response:
+                      data = json.load(response)
+              except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+                  return ("", "")
+              repo_info = (data.get("head") or {}).get("repo") or {}
+              owner_info = repo_info.get("owner") or {}
+              head_owner = (owner_info.get("login") or "").strip()
+              author_login = ((data.get("user") or {}).get("login") or "").strip()
+              return (head_owner, author_login)
+
+          should_run = False
+          selected_pr = pr_number or ""
+          reason = f"{event}:{action}" if action else event
+
+          if event == "pull_request":
+              if pr_author.lower() == "finn-devops":
+                  should_run = False
+                  reason = "pull_request:bot_pr"
+              else:
+                  should_run = True
+          elif event == "issue_comment":
+              if issue_pr_url:
+                  selected_pr = issue_number
+                  head_owner, author_login = fetch_pr_details(repo_full, issue_number)
+                  if author_login.lower() == "finn-devops":
+                      should_run = False
+                      reason = "issue_comment:bot_pr"
+                  else:
+                      if repo_owner and head_owner and head_owner.lower() != repo_owner.lower():
+                          reason = "issue_comment:external_pr"
+                      elif not head_owner:
+                          reason = "issue_comment:unknown_owner"
+                      elif matches(comment_body) or matches_actor_review(comment_author, comment_body):
+                          should_run = True
+                          reason = "issue_comment:ai_review"
+                      else:
+                          reason = "issue_comment:no_match"
+              else:
+                  reason = "issue_comment:not_pr"
+          else:
+              reason = f"unsupported:{event}"
+
+          context = {
+              "should_run": "true" if should_run else "false",
+              "pr_number": selected_pr or "",
+              "reason": reason,
+          }
+          json.dump(context, open("context.json", "w"))
+          PY
+
+          cat context.json
+          SHOULD_RUN=$(jq -r '.should_run' context.json)
+          PR_NUMBER=$(jq -r '.pr_number' context.json)
+          REASON=$(jq -r '.reason' context.json)
+          echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "reason=$REASON" >> $GITHUB_OUTPUT
+          if [[ "$PR_NUMBER" != "" ]]; then
+            echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+          fi
+
+      - name: Fetch PR metadata
+        if: steps.determine.outputs.should_run == 'true'
+        id: pr-data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          gh api repos/${{ github.repository }}/pulls/$PR_NUMBER > pr.json
+          TITLE=$(jq -r '.title' pr.json)
+          BODY=$(jq -r '.body // ""' pr.json)
+          AUTHOR=$(jq -r '.user.login' pr.json)
+          URL=$(jq -r '.html_url' pr.json)
+          echo "title<<EOF" >> $GITHUB_OUTPUT
+          echo "$TITLE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "author=$AUTHOR" >> $GITHUB_OUTPUT
+          echo "pr_url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Run Claude metadata analysis
+        if: steps.determine.outputs.should_run == 'true'
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # yamllint disable rule:line-length
+          prompt: |
+            You are the PR metadata gatekeeper. Evaluate the pull request details below
+            and determine if it satisfies the repository authoring standards.
+
+            REPOSITORY: ${{ github.repository }}
+            PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+            PR_TITLE: "${{ steps.pr-data.outputs.title }}"
+            PR_AUTHOR: ${{ steps.pr-data.outputs.author }}
+
+            PR_BODY (between delimiters):
+            <<<PR_BODY_START>>>
+            ${{ steps.pr-data.outputs.body }}
+            <<<PR_BODY_END>>>
+
+            Checklist definitions from the PR template:
+            1. description — The checkbox labelled "I have provided a clear description of
+               the work in this PR (what and why)". This is satisfied only when the checkbox
+               is checked AND the PR body contains at least one sentence that clearly states
+               what changed and why it matters.
+
+            Tasks:
+            - Check the PR title and PR body for grammatical correctness and clarity.
+            - Do not fail title grammar or imperative checks solely because the first word
+              after a conventional commit prefix is lowercase (e.g., "feat: do this").
+              Capitalization does not affect imperative mood.
+            - Confirm the PR title uses the imperative mood (starts with a verb commanding
+              the action, per conventional commits). When a title could be read as either
+              imperative or another part of speech (e.g., "Integrate feature X"), assume
+              the author intended the imperative reading unless the context clearly shows
+              otherwise.
+            - Evaluate whether the description checklist item is both checked and actually
+              satisfied according to the definition above.
+            - If the title fails the imperative check, propose a concrete rewrite that uses
+              imperative mood (e.g., "Add ...", "Update ...").
+            - Provide actionable reasoning for any failures. If everything passes, keep the
+              notes list empty.
+
+            Output EXACTLY one machine-readable line using this JSON schema:
+            CLAUDE_DECISION::{"titleGrammar":"pass|fail","imperativeTitle":"pass|fail","bodyGrammar":"pass|fail","checklist":[{"item":"description","checked":true|false,"satisfied":true|false,"reason":"string"}],"overallStatus":"pass|fail","notes":["string"]}
+
+            Rules:
+            - Use lowercase true/false for booleans.
+            - If any field is "fail" or the checklist entry is unsatisfied, set
+              overallStatus to "fail" and include at least one short note explaining the
+              issue.
+            - Do not include any extra prose before or after the CLAUDE_DECISION line.
+            - Do not use todo/task planning tools; respond directly with the CLAUDE_DECISION
+              line only.
+          # yamllint enable rule:line-length
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 12
+            --allowedTools Read,WebSearch
+            --disallowedTools Task,TodoWrite,Bash,Edit,Write,Glob,Grep,NotebookEdit
+
+      - name: Check for AI review
+        if: steps.determine.outputs.should_run == 'true'
+        id: ai-review
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = Number(process.env.PR_NUMBER || 0);
+
+            if (!pullNumber) {
+              core.info('No pull request number available for AI review detection.');
+              core.setOutput('has_ai_review', 'false');
+              core.setOutput('ai_review_source', '');
+              core.setOutput('ai_review_type', '');
+              core.setOutput('ai_review_actor', '');
+              core.setOutput('ai_review_url', '');
+              core.setOutput('ai_review_created_at', '');
+              return;
+            }
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number: pullNumber, per_page: 100 },
+            );
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              { owner, repo, pull_number: pullNumber, per_page: 100 },
+            );
+
+            const defaultPatterns = [
+              { source: 'claude', regex: /##\s*Code Review Summary/i },
+              { source: 'claude', regex: /Review performed by Claude/i },
+              { source: 'codex', regex: /Codex Review/i },
+              { source: 'claude', regex: /^\*\*Claude finished @/i },
+            ];
+            let aiPatterns = defaultPatterns;
+            try {
+              const parsedPatterns = JSON.parse(
+                process.env.AI_REVIEW_PATTERNS || '[]',
+              );
+              if (Array.isArray(parsedPatterns) && parsedPatterns.length > 0) {
+                aiPatterns = parsedPatterns.map((pattern) => ({
+                  source: /codex/i.test(pattern) ? 'codex' : 'claude',
+                  regex: new RegExp(pattern, 'i'),
+                }));
+              }
+            } catch (error) {
+              aiPatterns = defaultPatterns;
+            }
+            const defaultActorPatterns = [/^blocks$/i, /^blocksorg$/i, /^blocks\\[bot\\]$/i];
+            let actorPatterns = defaultActorPatterns;
+            try {
+              const parsedActorPatterns = JSON.parse(
+                process.env.AI_REVIEW_ACTOR_PATTERNS || '[]',
+              );
+              if (Array.isArray(parsedActorPatterns) && parsedActorPatterns.length > 0) {
+                actorPatterns = parsedActorPatterns.map(
+                  (pattern) => new RegExp(pattern, 'i'),
+                );
+              }
+            } catch (error) {
+              actorPatterns = defaultActorPatterns;
+            }
+
+            const matchesActor = (actor) =>
+              actorPatterns.some((regex) => regex.test(actor || ''));
+            const actorReviewMarkers = [
+              /Review posted on PR/i,
+              /What I checked/i,
+              /Inline comments added/i,
+            ];
+
+            const parseDate = (value) => {
+              if (!value) {
+                return 0;
+              }
+              const time = Date.parse(value);
+              return Number.isNaN(time) ? 0 : time;
+            };
+
+            const entries = [];
+            for (const comment of comments) {
+              entries.push({
+                type: 'comment',
+                actor: comment.user?.login || 'unknown',
+                body: comment.body || '',
+                created_at: comment.created_at || comment.updated_at || '',
+                url: comment.html_url || comment.url || '',
+              });
+            }
+
+            for (const review of reviews) {
+              entries.push({
+                type: 'review',
+                actor: review.user?.login || 'unknown',
+                body: review.body || '',
+                created_at:
+                  review.submitted_at || review.created_at || review.updated_at || '',
+                url:
+                  review.html_url ||
+                  review._links?.html?.href ||
+                  review._links?.pull_request?.href ||
+                  '',
+              });
+            }
+
+            entries.sort(
+              (a, b) => parseDate(b.created_at) - parseDate(a.created_at),
+            );
+
+            let match = null;
+            for (const entry of entries) {
+              const body = entry.body || '';
+              const bodyPattern = aiPatterns.find((candidate) =>
+                candidate.regex.test(body),
+              );
+              const actorMatched = matchesActor(entry.actor);
+              const actorReviewMatched =
+                actorMatched &&
+                (entry.type === 'review' ||
+                  actorReviewMarkers.some((regex) => regex.test(body)));
+
+              if (bodyPattern || actorReviewMatched) {
+                match = {
+                  ...entry,
+                  source: bodyPattern ? bodyPattern.source : 'blocks',
+                };
+                break;
+              }
+            }
+
+            if (match) {
+              core.info(
+                `Detected ${match.source} ${match.type} from @${match.actor} at ${match.created_at}`,
+              );
+              core.setOutput('has_ai_review', 'true');
+              core.setOutput('ai_review_source', match.source);
+              core.setOutput('ai_review_type', match.type);
+              core.setOutput('ai_review_actor', match.actor || '');
+              core.setOutput('ai_review_url', match.url || '');
+              core.setOutput('ai_review_created_at', match.created_at || '');
+            } else {
+              core.info('No AI review detected in PR timeline.');
+              core.setOutput('has_ai_review', 'false');
+              core.setOutput('ai_review_source', '');
+              core.setOutput('ai_review_type', '');
+              core.setOutput('ai_review_actor', '');
+              core.setOutput('ai_review_url', '');
+              core.setOutput('ai_review_created_at', '');
+            }
+        env:
+          PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse Claude decision
+        if: steps.determine.outputs.should_run == 'true'
+        id: evaluate
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          AI_REVIEW_STATUS: ${{ steps.ai-review.outputs.has_ai_review }}
+          AI_REVIEW_SOURCE: ${{ steps.ai-review.outputs.ai_review_source }}
+          AI_REVIEW_ACTOR: ${{ steps.ai-review.outputs.ai_review_actor }}
+          AI_REVIEW_URL: ${{ steps.ai-review.outputs.ai_review_url }}
+          AI_REVIEW_CREATED_AT: ${{ steps.ai-review.outputs.ai_review_created_at }}
+          PR_TITLE: ${{ steps.pr-data.outputs.title }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          exec_file = os.environ.get("EXECUTION_FILE")
+          if not exec_file or not Path(exec_file).exists():
+            raise SystemExit("Claude execution file not found.")
+
+          turns = json.loads(Path(exec_file).read_text())
+          decision = None
+          pattern = re.compile(r"CLAUDE_DECISION::({.*})", re.DOTALL)
+          total_input_tokens = 0
+          total_output_tokens = 0
+          total_duration_ms = 0
+          total_cost_usd = 0.0
+
+          for turn in turns:
+            turn_type = turn.get("type")
+            if turn_type == "result":
+              total_duration_ms = max(total_duration_ms, turn.get("duration_ms") or 0)
+              total_cost_usd = max(total_cost_usd, turn.get("total_cost_usd") or 0.0)
+              continue
+
+            if turn_type != "assistant":
+              continue
+
+            message = turn.get("message", {})
+            usage = message.get("usage") or {}
+            input_tokens = usage.get("input_tokens") or 0
+            input_tokens += usage.get("cache_creation_input_tokens") or 0
+            input_tokens += usage.get("cache_read_input_tokens") or 0
+            total_input_tokens += input_tokens
+            total_output_tokens += usage.get("output_tokens") or 0
+
+            if decision:
+              continue
+
+            for item in message.get("content", []):
+              text = item.get("text")
+              if not text:
+                continue
+              match = pattern.search(text)
+              if match:
+                try:
+                  decision = json.loads(match.group(1))
+                  break
+                except json.JSONDecodeError:
+                  continue
+
+          if decision is None:
+            raise SystemExit("CLAUDE_DECISION JSON not found in Claude output.")
+
+          title_grammar = decision.get("titleGrammar", "fail")
+          body_grammar = decision.get("bodyGrammar", "fail")
+          imperative = decision.get("imperativeTitle", "fail")
+          checklist = decision.get("checklist", [])
+          notes = decision.get("notes") or []
+          pr_title = (os.environ.get("PR_TITLE") or "").strip()
+
+          def normalize_whitespace(value: str) -> str:
+              return " ".join((value or "").strip().split())
+
+          def note_has_case_variant(note: str, title: str) -> bool:
+              if not note or not title:
+                  return False
+              note_clean = normalize_whitespace(note)
+              title_clean = normalize_whitespace(title)
+              if not note_clean or not title_clean:
+                  return False
+              if title_clean in note_clean:
+                  return False
+              return title_clean.casefold() in note_clean.casefold()
+
+          capitalization_override = False
+          if imperative == "fail" and notes and pr_title:
+              for note in notes:
+                  if note_has_case_variant(note, pr_title):
+                      capitalization_override = True
+                      break
+
+          if capitalization_override:
+              imperative = "pass"
+
+          def checklist_pass(items: list[dict]) -> bool:
+              for item in items:
+                  if not (item.get("checked") and item.get("satisfied")):
+                      return False
+              return True
+
+          overall = (
+              "pass"
+              if (
+                  title_grammar == "pass"
+                  and body_grammar == "pass"
+                  and imperative == "pass"
+                  and checklist_pass(checklist)
+              )
+              else "fail"
+          )
+          overall = decision.get("overallStatus", "fail").lower()
+
+          def format_status(label, value):
+            icon = "✅" if value == "pass" else "❌"
+            return f"{icon} **{label}** — {value}"
+
+          summary_lines = [
+            format_status("Title grammar", title_grammar),
+            format_status("Imperative title", imperative)
+            + (
+                " (Claude suggestion overridden - capitalization change only)"
+                if capitalization_override
+                else ""
+            ),
+            format_status("Body grammar", body_grammar),
+          ]
+
+          ai_review_present = (os.environ.get("AI_REVIEW_STATUS") or "").lower() == "true"
+          ai_review_source = (os.environ.get("AI_REVIEW_SOURCE") or "").strip()
+          ai_review_actor = os.environ.get("AI_REVIEW_ACTOR") or ""
+          ai_review_url = os.environ.get("AI_REVIEW_URL") or ""
+          ai_review_created = os.environ.get("AI_REVIEW_CREATED_AT") or ""
+
+          def format_ai_label(source: str) -> str:
+            if not source:
+              return "AI"
+            return source.strip().capitalize()
+
+          if ai_review_present:
+            review_label = f"{format_ai_label(ai_review_source)} review"
+            if ai_review_actor:
+              review_label += f" by @{ai_review_actor}"
+            if ai_review_created:
+              review_label += f" on {ai_review_created}"
+            if ai_review_url:
+              review_label = f"[{review_label}]({ai_review_url})"
+            summary_lines.append(f"✅ **AI review** — {review_label}")
+          else:
+            summary_lines.append(
+              "❌ **AI review** — missing. Trigger @claude, @codex, or @blocks to run an automated review.",
+            )
+
+          for item in checklist:
+            name = item.get("item", "unknown")
+            checked = item.get("checked")
+            satisfied = item.get("satisfied")
+            reason = item.get("reason") or ""
+            icon = "✅" if (checked and satisfied) else "❌"
+            summary_lines.append(
+              f"{icon} **Checklist: {name}** — checked={checked} satisfied={satisfied}. {reason}".strip()
+            )
+
+          marker = "<!-- pr-metadata-gate -->"
+          if notes:
+            summary_lines.append("")
+            summary_lines.append("**Notes:**")
+            for note in notes:
+              summary_lines.append(f"- {note}")
+
+          status_line = (
+            "🚫 **PR metadata gate failed**"
+            if overall == "fail"
+            else "✅ **PR metadata gate passed**"
+          )
+
+          comment_lines = [marker, status_line, "", *summary_lines]
+          comment_text = "\n".join(comment_lines).strip() + "\n"
+
+          tmp_path = Path(os.environ["RUNNER_TEMP"]) / "claude-pr-metadata-comment.md"
+          tmp_path.write_text(comment_text)
+          comment_path = str(tmp_path)
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a") as fh:
+            fh.write(f"overall_status={overall}\n")
+            fh.write(f"comment_path={comment_path}\n")
+            fh.write(f"token_input={total_input_tokens}\n")
+            fh.write(f"token_output={total_output_tokens}\n")
+            fh.write(f"duration_ms={total_duration_ms}\n")
+            fh.write(f"total_cost_usd={total_cost_usd}\n")
+
+          print("Claude decision:", json.dumps(decision, indent=2))
+          print(
+            f"Token usage — input: {total_input_tokens}, output: {total_output_tokens}, "
+            f"duration_ms: {total_duration_ms}, cost_usd: {total_cost_usd}"
+          )
+          PY
+
+      - name: Upsert metadata gate comment
+        if: steps.determine.outputs.should_run == 'true' && steps.evaluate.outputs.comment_path != ''
+        id: upsert-comment
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY_PATH: ${{ steps.evaluate.outputs.comment_path }}
+          PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- pr-metadata-gate -->';
+            const body = fs.readFileSync(process.env.COMMENT_BODY_PATH, 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER || 0) || context.payload.pull_request?.number;
+
+            if (!issue_number) {
+              core.setFailed('Cannot determine pull request number for comment update.');
+              return;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find(
+              (comment) =>
+                comment.user?.login === 'github-actions[bot]' &&
+                comment.body?.includes(marker),
+            );
+
+            let commentUrl = '';
+            if (existing) {
+              const updated = await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+              commentUrl = updated.data?.html_url || existing.html_url || '';
+            } else {
+              const created = await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+              commentUrl = created.data?.html_url || '';
+            }
+
+            if (commentUrl) {
+              core.info(`Metadata gate comment posted at ${commentUrl}`);
+            } else {
+              core.info('Metadata gate comment posted, but URL could not be determined.');
+            }
+            core.setOutput('comment_url', commentUrl);
+
+      - name: Report metadata gate status
+        if: steps.determine.outputs.should_run == 'true'
+        env:
+          OVERALL_STATUS: ${{ steps.evaluate.outputs.overall_status }}
+          AI_REVIEW_STATUS: ${{ steps.ai-review.outputs.has_ai_review }}
+          COMMENT_URL: ${{ steps.upsert-comment.outputs.comment_url }}
+          COMMENT_PATH: ${{ steps.evaluate.outputs.comment_path }}
+          TOKEN_INPUT: ${{ steps.evaluate.outputs.token_input }}
+          TOKEN_OUTPUT: ${{ steps.evaluate.outputs.token_output }}
+          DURATION_MS: ${{ steps.evaluate.outputs.duration_ms }}
+          TOTAL_COST_USD: ${{ steps.evaluate.outputs.total_cost_usd }}
+          REASON: ${{ steps.determine.outputs.reason }}
+        run: |
+          set -euo pipefail
+          echo "::group::PR metadata gate report"
+          echo "Trigger reason: ${REASON:-unknown}"
+          echo "Overall status: ${OVERALL_STATUS:-unknown}"
+          echo "AI review detected: ${AI_REVIEW_STATUS:-unknown}"
+          echo "Token usage — input: ${TOKEN_INPUT:-0}, output: ${TOKEN_OUTPUT:-0}, duration_ms: ${DURATION_MS:-0}"
+          echo "Token cost (USD): ${TOTAL_COST_USD:-0}"
+          if [[ -n "${COMMENT_URL}" ]]; then
+            echo "Comment URL: ${COMMENT_URL}"
+          elif [[ -n "${COMMENT_PATH}" ]]; then
+            echo "Comment body stored at ${COMMENT_PATH}"
+          else
+            echo "No comment generated."
+          fi
+          echo "::endgroup::"
+
+      - name: Fail when requirements are unmet
+        if: >-
+          steps.determine.outputs.should_run == 'true' &&
+          (steps.evaluate.outputs.overall_status == 'fail' ||
+          steps.ai-review.outputs.has_ai_review != 'true')
+        env:
+          OVERALL_STATUS: ${{ steps.evaluate.outputs.overall_status }}
+          AI_REVIEW_STATUS: ${{ steps.ai-review.outputs.has_ai_review }}
+        run: |
+          set -euo pipefail
+          if [[ "$OVERALL_STATUS" == "fail" ]]; then
+            echo "Claude flagged PR metadata issues. Blocking merge until resolved."
+          fi
+          if [[ "$AI_REVIEW_STATUS" != "true" ]]; then
+            echo "PR is missing an AI review. Trigger @claude, @codex, or @blocks to run an automated review."
+          fi
+          exit 1
+
+  rerun-metadata-gate:
+    name: Rerun PR Metadata Gate for AI comment
+    if: github.event_name == 'issue_comment'
+    runs-on: finn-runners
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Rerun latest PR Metadata Gate on head commit
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+
+            if (!issue?.pull_request) {
+              core.info('Comment is not on a pull request. Skipping rerun.');
+              return;
+            }
+
+            if (!comment?.body || !comment.body.trim()) {
+              core.info('Empty comment body. Skipping rerun.');
+              return;
+            }
+
+            const defaultPatterns = [
+              '##\\s*Code Review Summary',
+              'Review performed by Claude',
+              'Codex Review',
+              '^\\*\\*Claude finished @',
+            ];
+            const defaultActorPatterns = ['^blocks$', '^blocksorg$', '^blocks\\[bot\\]$'];
+            let patternSources;
+            try {
+              patternSources = JSON.parse(process.env.AI_REVIEW_PATTERNS || '[]');
+              if (!Array.isArray(patternSources) || patternSources.length === 0) {
+                patternSources = defaultPatterns;
+              }
+            } catch (error) {
+              patternSources = defaultPatterns;
+            }
+
+            const aiPatterns = patternSources.map((pattern) => new RegExp(pattern, 'i'));
+            let actorPatterns = defaultActorPatterns;
+            try {
+              actorPatterns = JSON.parse(
+                process.env.AI_REVIEW_ACTOR_PATTERNS || '[]',
+              );
+              if (!Array.isArray(actorPatterns) || actorPatterns.length === 0) {
+                actorPatterns = defaultActorPatterns;
+              }
+            } catch (error) {
+              actorPatterns = defaultActorPatterns;
+            }
+
+            const actorRegexes = actorPatterns.map((pattern) => new RegExp(pattern, 'i'));
+            const actorReviewMarkers = [
+              /Review posted on PR/i,
+              /What I checked/i,
+              /Inline comments added/i,
+            ];
+
+            const actorLogin = comment.user?.login || '';
+            const matchesActor =
+              actorRegexes.some((regex) => regex.test(actorLogin)) &&
+              actorReviewMarkers.some((regex) => regex.test(comment.body));
+            const matchesAI = aiPatterns.some((regex) => regex.test(comment.body)) || matchesActor;
+            if (!matchesAI) {
+              core.info('Comment does not appear to be an AI review. Skipping rerun.');
+              return;
+            }
+
+            const prNumber = issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            const headSha = pr.head.sha;
+            const headRef = pr.head.ref;
+
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'pr-metadata-gate.yaml',
+              branch: headRef,
+              event: 'pull_request',
+              per_page: 100,
+            });
+
+            const targetRun = data.workflow_runs.find((run) => run.head_sha === headSha);
+
+            if (!targetRun) {
+              core.setFailed(`No PR Metadata Gate run found for ${headRef} (${headSha}).`);
+              return;
+            }
+
+            await github.rest.actions.reRunWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: targetRun.id,
+            });
+
+            core.info(`Triggered rerun for PR Metadata Gate workflow run ${targetRun.id} on ${headSha}.`)

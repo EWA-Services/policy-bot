@@ -1,0 +1,66 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+# Policy Bot configuration for DevOps/Infrastructure repositories
+# These repositories contain critical code requiring
+# strict approval processes
+policy:
+  approval:
+    - or:
+        - finn-devops bypass no review required
+        - codegen-bot bypass no signature required
+        - dev-infrastructure team approval
+  disapproval:
+    requires:
+      organizations: [EWA-Services]
+
+approval_rules:
+  - name: finn-devops bypass no review required
+    description: Allow finn-devops to bypass review requirements
+    if:
+      targets_branch:
+        pattern: ^(main|prod)$
+      has_author_in:
+        users: [finn-devops]
+    options:
+      allow_author: false
+      invalidate_on_push: false
+    requires:
+      count: 0  # No review requirements for finn-devops
+      conditions:
+        has_valid_signatures: true
+  - name: codegen-bot bypass no signature required
+    description: Allow CodeGen bot to work without signature requirements
+      but still requires reviews
+    if:
+      targets_branch:
+        pattern: ^(main|prod)$
+      has_author_in:
+        users: ["codegen-sh[bot]"]
+    options:
+      allow_author: false
+      invalidate_on_push: false
+      request_review:
+        enabled: true
+        mode: teams
+    requires:
+      count: 2
+      teams:
+        - EWA-Services/dev-infrastructure
+  - name: dev-infrastructure team approval
+    description: Requires 2 approvals from team for all PRs to main or prod
+    if:
+      targets_branch:
+        pattern: ^(main|prod)$
+    options:
+      allow_author: false
+      invalidate_on_push: false
+      request_review:
+        enabled: true
+        mode: teams
+    requires:
+      count: 2
+      teams:
+        - EWA-Services/dev-infrastructure
+      conditions:
+        has_valid_signatures: true

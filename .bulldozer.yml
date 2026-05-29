@@ -1,17 +1,23 @@
-# Excavator auto-updates this file. Please contribute improvements to the central template.
-
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
 version: 1
+
 merge:
   trigger:
-    labels: ["merge when ready"]
-  ignore:
-    labels: ["do not merge"]
+    labels: [automerge]
+
   method: squash
+
   options:
     squash:
+      title: pull_request_title
       body: pull_request_body
-      message_delimiter: ==COMMIT_MSG==
+
   delete_after_merge: true
-update:
-  trigger:
-    labels: ["update me"]
+
+  # Must be true for repositories protected by GitHub Rulesets
+  # Bulldozer sees ruleset-protected repos as having "no checks"
+  # Without this, Bulldozer will refuse to merge PRs in those repos
+  # Related: https://github.com/palantir/bulldozer/issues/617
+  allow_merge_with_no_checks: true

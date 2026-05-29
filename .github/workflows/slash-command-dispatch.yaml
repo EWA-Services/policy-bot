@@ -1,0 +1,23 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: Slash Command Dispatch
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: read          # To read issue comments
+  pull-requests: read   # To check if comment is on a PR
+
+jobs:
+  slashCommandDispatch:
+    runs-on: finn-runners
+    steps:
+      - name: Slash Command Dispatch
+        uses: peter-evans/slash-command-dispatch@v4
+        with:
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          commands: rebase
+          permission: write
+          issue-type: pull-request

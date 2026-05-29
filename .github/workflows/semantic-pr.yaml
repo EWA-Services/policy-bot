@@ -1,0 +1,268 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: Semantic Pull Request
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  pr_description:
+    # Please read the following document
+    # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepscontinue-on-error
+    # This doesn't mean that author can merge if the job fails.
+    # It means that it will allow the workflow to continue even if the job fails.
+    # This is useful for the semantic-pr job to continue even if the pr_description job fails.
+    continue-on-error: true
+    name: Validate Required PR Description
+    runs-on: finn-runners
+    steps:
+      - name: Validate Pull request description
+        id: validation
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        # yamllint disable rule:line-length
+        run: |
+          # Initialize validation result output
+          VALIDATION_RESULT=""
+          VALIDATION_STATUS="success"
+
+          # Use a case-insensitive regex to match the checkbox text
+          MARKED="\[x\] I have"
+
+          # Convert to lowercase for case-insensitive matching
+          BODY=${BODY,,}
+
+          CHECKED_COUNT=$(echo "$BODY" | grep -ic "$MARKED" || true)
+
+          # Skip validation for release PRs with enhanced security checks
+          # 1. Must be authored by finn-devops
+          # 2. Must have release title format
+          # 3. Must contain robot message
+          # 4. Must NOT be from a fork (security check)
+          # 5. Must be from release-please branch pattern (security check)
+
+          # Check if all release PR conditions are met
+          # Release Please can use either:
+          # - release(component): message
+          # - chore(main): release message
+          if [[ "$PR_AUTHOR" == "finn-devops" ]] && \
+             ( [[ "$PR_TITLE" =~ ^release\(.*\):.* ]] || [[ "$PR_TITLE" =~ ^chore\(.*\):.*release.* ]] ) && \
+             [[ "$BODY" == *":robot: i have created a release"* ]]; then
+
+              # Security check: Ensure PR is not from a fork
+              if [[ "$PR_HEAD_REPO" != "$PR_BASE_REPO" ]]; then
+                  echo "❌ Security validation failed: Release PR appears to be from a fork"
+                  echo "Head repo: $PR_HEAD_REPO"
+                  echo "Base repo: $PR_BASE_REPO"
+                  VALIDATION_RESULT="❌ **Security Alert**: Release PR validation failed - PR is from a fork"$'\n\n'
+                  VALIDATION_RESULT+="Release PRs must originate from the same repository."$'\n'
+                  VALIDATION_RESULT+="This could be an attempt to bypass validation checks."
+                  echo "VALIDATION_RESULT<<EOF" >> $GITHUB_ENV
+                  echo "$VALIDATION_RESULT" >> $GITHUB_ENV
+                  echo "EOF" >> $GITHUB_ENV
+                  echo "VALIDATION_STATUS=failure" >> $GITHUB_ENV
+                  exit 0
+              fi
+
+              # Security check: Validate release-please branch naming pattern
+              # Release Please uses pattern: release-please--branches--main--components--<component>
+              if [[ ! "$PR_HEAD_BRANCH" =~ ^release-please--branches--.* ]]; then
+                  echo "⚠️ Warning: Release PR branch doesn't match expected pattern"
+                  echo "Branch: $PR_HEAD_BRANCH"
+                  echo "Expected pattern: release-please--branches--*"
+                  # Log warning but don't fail - some repos might use different patterns
+              fi
+
+              echo "✅ Release PR detected with security validation passed"
+              VALIDATION_RESULT="✅ **Release PR detected** - Validation skipped for automated release"$'\n\n'
+              VALIDATION_RESULT+="Security checks passed:"$'\n'
+              VALIDATION_RESULT+="• PR is from the same repository (not a fork)"$'\n'
+              VALIDATION_RESULT+="• Authored by finn-devops automation account"
+              echo "VALIDATION_RESULT<<EOF" >> $GITHUB_ENV
+              echo "$VALIDATION_RESULT" >> $GITHUB_ENV
+              echo "EOF" >> $GITHUB_ENV
+              echo "VALIDATION_STATUS=$VALIDATION_STATUS" >> $GITHUB_ENV
+              exit 0
+          fi
+
+          VALIDATION_RESULT="**PR Description Validation Report**"$'\n\n'
+          VALIDATION_RESULT+="👤 **Author:** $PR_AUTHOR"$'\n\n'
+
+          # Different checkbox requirements for finn-devops vs human users
+          if [[ "$PR_AUTHOR" == "finn-devops" ]]; then
+              VALIDATION_RESULT+="🤖 **Account Type:** Automation"$'\n\n'
+              VALIDATION_RESULT+="**Checkbox Requirement:**"$'\n'
+              # finn-devops only needs description checkbox (can't link tickets)
+              if [[ $CHECKED_COUNT -ge 1 ]]; then
+                  echo "✅ Automation account checkbox requirement met (Found: $CHECKED_COUNT/1 required)."
+                  VALIDATION_RESULT+="✅ Checkbox requirement met (Found: $CHECKED_COUNT/1 required)"$'\n\n'
+              else
+                  echo "❌ Automation account needs at least 1 checkbox checked (Found: $CHECKED_COUNT)."
+                  VALIDATION_RESULT+="❌ **At least 1 checkbox must be checked** (Found: $CHECKED_COUNT)"$'\n\n'
+                  VALIDATION_RESULT+="⚠️ **Action Required:** Please check the required checkbox in the PR description"$'\n'
+                  VALIDATION_STATUS="failure"
+              fi
+          else
+              VALIDATION_RESULT+="👤 **Account Type:** Human User"$'\n\n'
+              VALIDATION_RESULT+="**Validation Results:**"$'\n\n'
+
+              # Human users need both description and ticket checkboxes
+              if [[ $CHECKED_COUNT -ge 2 ]]; then
+                  echo "✅ Human user checkbox requirement met (Found: $CHECKED_COUNT/2 required)."
+                  VALIDATION_RESULT+="✅ **Checkbox Requirement:** Met (Found: $CHECKED_COUNT/2 required)"$'\n'
+              else
+                  echo "❌ Human user needs at least 2 checkboxes checked (Found: $CHECKED_COUNT)."
+                  VALIDATION_RESULT+="❌ **Checkbox Requirement:** Failed (Found: $CHECKED_COUNT/2 required)"$'\n'
+                  VALIDATION_STATUS="failure"
+              fi
+          fi
+
+          # Check Linear ticket requirement (skip for automation accounts)
+          if [[ "$PR_AUTHOR" == "finn-devops" ]]; then
+              echo "🤖 Skipping Linear ticket check for automation account: $PR_AUTHOR"
+              VALIDATION_RESULT+="🤖 Linear ticket check skipped for automation account"$'\n'
+          else
+              echo "👤 Checking Linear ticket requirement for user: $PR_AUTHOR"
+
+              # Check if Linear bot has commented on the PR (indicating proper Linear linking)
+              LINEAR_BOT_COMMENT=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+                "https://api.github.com/repos/$REPOSITORY/issues/$PR_NUMBER/comments" | \
+                jq -r '.[] | select(.user.login == "linear[bot]") | .id' | head -1)
+
+              if [[ -n "$LINEAR_BOT_COMMENT" ]]; then
+                  echo "✅ Linear bot comment found, PR is properly linked to Linear issue"
+                  VALIDATION_RESULT+="✅ **Linear Ticket:** Properly linked"$'\n'
+              else
+                  echo "❌ No Linear bot comment found. Please ensure the PR is properly linked to a Linear issue."
+                  VALIDATION_RESULT+="❌ **Linear Ticket:** Not linked"$'\n'
+                  VALIDATION_RESULT+="🔗 **How to link a Linear ticket:**"$'\n'
+                  VALIDATION_RESULT+="- Include the Linear issue ID (e.g., ID-123) in the branch name - Linear provides a branch name for each issue"$'\n'
+                  VALIDATION_RESULT+="- Include the Linear issue ID in the pull request title"$'\n'
+                  VALIDATION_RESULT+="- Add a magic word + issue ID in the PR description (e.g., Fixes ENG-123 or Fixes https://linear.app/workspace/issue/ENG-123/title)"$'\n'
+                  VALIDATION_RESULT+="More details: https://linear.app/docs/github#link-through-pull-requests"$'\n'
+                  VALIDATION_STATUS="failure"
+              fi
+          fi
+
+          # Add action required message if validation failed
+          if [[ "$VALIDATION_STATUS" == "failure" ]]; then
+              VALIDATION_RESULT+=$'\n---\n'
+              VALIDATION_RESULT+="⚠️ **Action Required:**"$'\n'
+              if [[ "$PR_AUTHOR" == "finn-devops" ]]; then
+                  VALIDATION_RESULT+="- Please check at least 1 checkbox in the PR description"$'\n'
+              else
+                  if [[ $CHECKED_COUNT -lt 2 ]]; then
+                      VALIDATION_RESULT+="- Please check at least 2 checkboxes in the PR description"$'\n'
+                  fi
+                  if [[ -z "$LINEAR_BOT_COMMENT" ]]; then
+                      VALIDATION_RESULT+="- Please link this PR to a Linear issue (see options above)"$'\n'
+                  fi
+              fi
+          else
+              VALIDATION_RESULT+=$'\n---\n'
+              VALIDATION_RESULT+="✅ **All validation checks passed!**"$'\n'
+          fi
+
+          # Save validation results for the comment step
+          echo "VALIDATION_RESULT<<EOF" >> $GITHUB_ENV
+          echo "$VALIDATION_RESULT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "VALIDATION_STATUS=$VALIDATION_STATUS" >> $GITHUB_ENV
+        # yamllint enable rule:line-length
+
+      - name: Post Validation Results
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ env.VALIDATION_RESULT }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.user.login === 'github-actions[bot]' &&
+              comment.body.includes('**PR Description Validation Report**')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: process.env.COMMENT_BODY
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: process.env.COMMENT_BODY
+              });
+            }
+
+      - name: Check Pull request description
+        if: always()
+        run: |
+          if [[ "$VALIDATION_STATUS" == "failure" ]]; then
+            echo "❌ PR description validation failed"
+            echo "Branch protection will prevent merging until validation passes"
+            exit 1
+          else
+            echo "✅ PR description validation passed"
+          fi
+  semantic-pr:
+    name: Validate PR Title
+    needs: [pr_description]
+    runs-on: finn-runners
+    # Please read the document here:
+    # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepscontinue-on-error
+    # This doesn't mean that author can merge if the job fails.
+    # It means that it will allow the workflow to continue even if the job fails.
+    # This is useful for the semantic-pr job to continue even if the pr_description job fails.
+    continue-on-error: true
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        # yamllint disable rule:line-length
+        with:
+          # Default types can be found here:
+          # https://github.com/commitizen/conventional-commit-types/blob/master/index.json
+          # Notes: chore - Cannot be removed currently, as some workflows still rely on this type to perform releases.
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            release
+            revert
+            style
+            test
+          # yamllint enable rule:line-length
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
