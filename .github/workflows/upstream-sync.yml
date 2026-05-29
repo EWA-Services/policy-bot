@@ -1,0 +1,112 @@
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: palantir/policy-bot
+  UPSTREAM_BRANCH: develop
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FINN_DEVOPS_CONTENT_WRITE_PAT }}
+
+      - name: Add upstream remote and fetch
+        run: |
+          set -euo pipefail
+          git config user.name "EWA DevOps"
+          git config user.email "devops@ewa-services.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Detect upstream delta
+        id: detect
+        run: |
+          set -euo pipefail
+          behind=$(git rev-list --count HEAD.."upstream/${UPSTREAM_BRANCH}")
+          upstream_sha=$(git rev-parse "upstream/${UPSTREAM_BRANCH}")
+          echo "behind=${behind}" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+          if [ "${behind}" = "0" ]; then
+            echo "Fork is up to date with ${UPSTREAM_REPO}/${UPSTREAM_BRANCH}."
+          else
+            echo "Fork is ${behind} commit(s) behind ${UPSTREAM_REPO}/${UPSTREAM_BRANCH}."
+          fi
+
+      - name: Prepare sync branch
+        if: ${{ steps.detect.outputs.behind != '0' }}
+        id: prepare
+        env:
+          UPSTREAM_SHA: ${{ steps.detect.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          short=$(printf '%s' "${UPSTREAM_SHA}" | cut -c1-7)
+          branch="chore/upstream-sync-${short}"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "${branch}"
+          if ! git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+            git add -A
+            git commit -m "chore: upstream sync with conflicts (requires manual resolution)"
+          else
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push sync branch
+        if: ${{ steps.detect.outputs.behind != '0' }}
+        env:
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git push --force-with-lease --set-upstream origin "${BRANCH}"
+
+      - name: Open or update PR
+        if: ${{ steps.detect.outputs.behind != '0' }}
+        env:
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          SHORT: ${{ steps.prepare.outputs.short }}
+          BEHIND: ${{ steps.detect.outputs.behind }}
+          CONFLICTS: ${{ steps.prepare.outputs.conflicts }}
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_CONTENT_WRITE_PAT }}
+        run: |
+          set -euo pipefail
+          title="chore: sync upstream policy-bot ${SHORT}"
+          body_file=$(mktemp)
+          {
+            echo "## Checklist"
+            echo "- [x] I have provided a clear description of the work in this PR (what and why)"
+            echo "- [ ] I have linked a ticket to this PR"
+            echo ""
+            echo "## Description"
+            echo ""
+            echo "Daily scheduled merge from \`${UPSTREAM_REPO}/${UPSTREAM_BRANCH}\`."
+            echo ""
+            echo "- Upstream HEAD: \`${SHORT}\`"
+            echo "- Commits behind before merge: \`${BEHIND}\`"
+            if [ "${CONFLICTS}" = "true" ]; then
+              echo "- :warning: Merge had conflicts — conflict markers are committed; resolve manually before merging."
+            else
+              echo "- Clean merge (no conflicts)."
+            fi
+          } > "${body_file}"
+
+          pr_number=$(gh pr list --state open --head "${BRANCH}" --json number --jq '.[0].number // empty')
+          if [ -n "${pr_number}" ]; then
+            gh pr edit "${pr_number}" --title "${title}" --body-file "${body_file}"
+          else
+            gh pr create --title "${title}" --body-file "${body_file}" --head "${BRANCH}"
+          fi
