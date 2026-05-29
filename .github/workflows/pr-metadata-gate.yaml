@@ -1,0 +1,183 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: PR Metadata Gate
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - ready_for_review
+      - synchronize
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+
+permissions: {}
+
+env:
+  AI_REVIEW_PATTERNS: >-
+    ["<!--\\s*direct-cli-review:claude\\s*-->","<!--\\s*direct-cli-review:codex\\s*-->",
+    "##\\s*Code Review Summary","Review performed by Claude","Codex Review"]
+  AI_REVIEW_ACTOR_PATTERNS: >-
+    ["^blocks$","^blocksorg$","^blocks\\[bot\\]$","^blocksorg\\[bot\\]$","^finn-claude$","^finn-codex$"]
+
+jobs:
+  metadata-quality:
+    name: Validate PR metadata with Claude
+    runs-on: finn-runners
+    if: >-
+      ${{
+        (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
+        && github.actor != 'finn-devops'
+      }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: EWA-Services/EWA-Actions/.github/actions/pr-metadata-gate@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  metadata-quality-ai-followup:
+    name: PR metadata gate (AI review follow-up)
+    runs-on: finn-runners
+    if: >-
+      ${{
+        (github.event_name == 'pull_request_review' ||
+          github.event_name == 'pull_request_review_comment')
+        && github.actor != 'finn-devops'
+      }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: EWA-Services/EWA-Actions/.github/actions/pr-metadata-gate@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  rerun-metadata-gate:
+    name: Rerun PR Metadata Gate for AI comment
+    if: github.event_name == 'issue_comment'
+    runs-on: finn-runners
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Rerun latest PR Metadata Gate on head commit
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+
+            if (!issue?.pull_request) {
+              core.info('Comment is not on a pull request. Skipping rerun.');
+              return;
+            }
+
+            if (!comment?.body || !comment.body.trim()) {
+              core.info('Empty comment body. Skipping rerun.');
+              return;
+            }
+
+            const defaultPatterns = [
+              '<!--\\s*direct-cli-review:claude\\s*-->',
+              '<!--\\s*direct-cli-review:codex\\s*-->',
+              '##\\s*Code Review Summary',
+              'Review performed by Claude',
+              'Codex Review',
+            ];
+            const defaultActorPatterns = [
+              '^blocks$',
+              '^blocksorg$',
+              '^blocks\\[bot\\]$',
+              '^blocksorg\\[bot\\]$',
+              '^finn-claude$',
+              '^finn-codex$',
+            ];
+            let patternSources;
+            try {
+              patternSources = JSON.parse(process.env.AI_REVIEW_PATTERNS || '[]');
+              if (!Array.isArray(patternSources) || patternSources.length === 0) {
+                patternSources = defaultPatterns;
+              }
+            } catch (error) {
+              patternSources = defaultPatterns;
+            }
+
+            const aiPatterns = patternSources.map((pattern) => new RegExp(pattern, 'i'));
+            let actorPatterns = defaultActorPatterns;
+            try {
+              actorPatterns = JSON.parse(
+                process.env.AI_REVIEW_ACTOR_PATTERNS || '[]',
+              );
+              if (!Array.isArray(actorPatterns) || actorPatterns.length === 0) {
+                actorPatterns = defaultActorPatterns;
+              }
+            } catch (error) {
+              actorPatterns = defaultActorPatterns;
+            }
+
+            const actorRegexes = actorPatterns.map((pattern) => new RegExp(pattern, 'i'));
+            const actorReviewMarkers = [
+              /Review posted on PR/i,
+              /What I checked/i,
+              /Inline comments added/i,
+              /inline PR review comment/i,
+              /I posted this as an inline/i,
+            ];
+
+            const actorLogin = comment.user?.login || '';
+            const matchesActor =
+              actorRegexes.some((regex) => regex.test(actorLogin)) &&
+              actorReviewMarkers.some((regex) => regex.test(comment.body));
+            const matchesAI = aiPatterns.some((regex) => regex.test(comment.body)) || matchesActor;
+            if (!matchesAI) {
+              core.info('Comment does not appear to be an AI review. Skipping rerun.');
+              return;
+            }
+
+            const prNumber = issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            const headSha = pr.head.sha;
+            const headRef = pr.head.ref;
+
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'pr-metadata-gate.yaml',
+              branch: headRef,
+              event: 'pull_request',
+              per_page: 100,
+            });
+
+            const targetRun = data.workflow_runs.find((run) => run.head_sha === headSha);
+
+            if (!targetRun) {
+              core.setFailed(`No PR Metadata Gate run found for ${headRef} (${headSha}).`);
+              return;
+            }
+
+            await github.rest.actions.reRunWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: targetRun.id,
+            });
+
+            core.info(`Triggered rerun for PR Metadata Gate workflow run ${targetRun.id} on ${headSha}.`)

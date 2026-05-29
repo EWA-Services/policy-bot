@@ -1,0 +1,1556 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+#
+# Direct CLI Code Review Workflow
+# Triggers:
+#   1. @finn-claude in PR comment -> Answer questions or review on demand
+#   2. @finn-codex in PR comment -> Answer questions or review on demand
+#   3. @finn-claude or @finn-codex in inline comment -> Reply in thread about specific code
+#
+# yamllint disable rule:line-length
+---
+name: Code Review
+
+on:
+  issue_comment:
+    types:
+      - created
+  pull_request_review_comment:
+    types:
+      - created
+  pull_request:
+    types:
+      - opened
+      - reopened
+  # checkov:skip=CKV_GHA_7: "Manual workflow_dispatch inputs are required for operator validation and debugging."
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Which direct CLI reviewer to run
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - claude
+          - codex
+      pr_number:
+        description: Pull request number to review or respond on
+        required: true
+        type: string
+      trigger_type:
+        description: Review trigger type to simulate
+        required: true
+        default: pr_event
+        type: choice
+        options:
+          - pr_event
+          - pr_comment
+          - inline_comment
+      comment_body:
+        description: Comment body to simulate for comment-driven runs
+        required: false
+        default: ""
+        type: string
+      comment_author:
+        description: Comment author to simulate for workflow_dispatch
+        required: false
+        default: manual-dispatch
+        type: string
+      comment_id:
+        description: Existing inline review comment ID when trigger_type is inline_comment
+        required: false
+        default: ""
+        type: string
+      file_path:
+        description: File path for inline comment context
+        required: false
+        default: ""
+        type: string
+      line_number:
+        description: Line number for inline comment context
+        required: false
+        default: ""
+        type: string
+      claude_version:
+        description: Claude Code version to install for direct CLI runs
+        required: true
+        default: 2.1.73
+        type: string
+      claude_model:
+        description: Claude model to use for direct CLI runs
+        required: true
+        default: claude-opus-4-5-20251101
+        type: string
+      claude_effort:
+        description: Claude effort level for direct CLI runs (low|medium|high|xhigh|max)
+        required: true
+        default: max
+        type: string
+      codex_version:
+        description: Codex CLI version to install for direct CLI runs
+        required: true
+        default: 0.114.0
+        type: string
+      codex_model:
+        description: Codex model to use for direct CLI runs
+        required: true
+        default: gpt-5.4
+        type: string
+      codex_reasoning_effort:
+        description: Codex reasoning effort for direct CLI runs (none|low|medium|high|xhigh)
+        required: true
+        default: xhigh
+        type: string
+
+permissions: {}
+
+env:
+  CLAUDE_TRIGGER_HANDLE: "@finn-claude"
+  CODEX_TRIGGER_HANDLE: "@finn-codex"
+  PPLX_VERSION: 0.9.0
+  REVIEW_GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN || secrets.CLAUDE_REVIEW_GH_TOKEN || github.token }}
+
+jobs:
+  welcome:
+    name: Welcome message
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for existing welcome message
+        id: check-welcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing_count="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --jq '[.[] | select(.body | contains("**Code Review Assistant**"))] | length')"
+          if [ "${existing_count}" -gt 0 ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post welcome message
+        if: steps.check-welcome.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "$(cat <<'EOF'
+          🤖 **Code Review Assistant**
+
+          This PR supports direct CLI reviews from both providers:
+          - `@finn-claude` for Claude Code direct CLI review
+          - `@finn-codex` for Codex CLI review
+
+          **How to trigger a review:**
+          - Mention `@finn-claude` or `@finn-codex` in a PR comment for questions or an on-demand review
+          - Mention `@finn-claude` or `@finn-codex` in an inline review comment for a threaded reply about that code
+
+          **Review behavior:**
+          - Full reviews inspect the diff and surrounding code
+          - Inline comments are reserved for actionable issues that should be fixed
+          - Summary comments explain findings or explicitly state when no actionable findings were found
+
+          _Note: Reviews are mention-only. This workflow does not auto-review on ready-for-review._
+          EOF
+          )"
+
+  resolve-context:
+    name: Resolve review context
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'issue_comment' ||
+      github.event_name == 'pull_request_review_comment'
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.resolve.outputs.should_run }}
+      run_claude: ${{ steps.resolve.outputs.run_claude }}
+      run_codex: ${{ steps.resolve.outputs.run_codex }}
+      target_pr_number: ${{ steps.resolve.outputs.target_pr_number }}
+      trigger_type: ${{ steps.resolve.outputs.trigger_type }}
+      comment_body_b64: ${{ steps.resolve.outputs.comment_body_b64 }}
+      comment_author: ${{ steps.resolve.outputs.comment_author }}
+      comment_id: ${{ steps.resolve.outputs.comment_id }}
+      file_path: ${{ steps.resolve.outputs.file_path }}
+      line_number: ${{ steps.resolve.outputs.line_number }}
+      claude_version: ${{ steps.resolve.outputs.claude_version }}
+      claude_model: ${{ steps.resolve.outputs.claude_model }}
+      claude_effort: ${{ steps.resolve.outputs.claude_effort }}
+      codex_version: ${{ steps.resolve.outputs.codex_version }}
+      codex_model: ${{ steps.resolve.outputs.codex_model }}
+      codex_reasoning_effort: ${{ steps.resolve.outputs.codex_reasoning_effort }}
+
+    steps:
+      - name: Resolve trigger, providers, and comment context
+        id: resolve
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+          DISPATCH_PROVIDER: ${{ inputs.provider }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr_number }}
+          DISPATCH_TRIGGER_TYPE: ${{ inputs.trigger_type }}
+          DISPATCH_COMMENT_BODY: ${{ inputs.comment_body }}
+          DISPATCH_COMMENT_AUTHOR: ${{ inputs.comment_author }}
+          DISPATCH_COMMENT_ID: ${{ inputs.comment_id }}
+          DISPATCH_FILE_PATH: ${{ inputs.file_path }}
+          DISPATCH_LINE_NUMBER: ${{ inputs.line_number }}
+          CLAUDE_VERSION_INPUT: ${{ inputs.claude_version }}
+          CLAUDE_MODEL_INPUT: ${{ inputs.claude_model }}
+          CLAUDE_EFFORT_INPUT: ${{ inputs.claude_effort }}
+          CODEX_VERSION_INPUT: ${{ inputs.codex_version }}
+          CODEX_MODEL_INPUT: ${{ inputs.codex_model }}
+          CODEX_REASONING_EFFORT_INPUT: ${{ inputs.codex_reasoning_effort }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          event_name = os.environ["EVENT_NAME"]
+          event_action = os.environ.get("EVENT_ACTION", "")
+          repository = os.environ["REPOSITORY"]
+          actor = os.environ["ACTOR"]
+          trigger_handles = {
+              "claude": os.environ.get("CLAUDE_TRIGGER_HANDLE", "@finn-claude").strip().lower(),
+              "codex": os.environ.get("CODEX_TRIGGER_HANDLE", "@finn-codex").strip().lower(),
+          }
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8"))
+          assistant_login = ""
+
+          outputs = {
+              "should_run": "false",
+              "run_claude": "false",
+              "run_codex": "false",
+              "target_pr_number": "",
+              "trigger_type": "",
+              "comment_body_b64": "",
+              "comment_author": "",
+              "comment_id": "",
+              "file_path": "",
+              "line_number": "",
+              "claude_version": os.environ.get("CLAUDE_VERSION_INPUT") or "2.1.73",
+              "claude_model": os.environ.get("CLAUDE_MODEL_INPUT") or "claude-opus-4-5-20251101",
+              "claude_effort": os.environ.get("CLAUDE_EFFORT_INPUT") or "max",
+              "codex_version": os.environ.get("CODEX_VERSION_INPUT") or "0.114.0",
+              "codex_model": os.environ.get("CODEX_MODEL_INPUT") or "gpt-5.4",
+              "codex_reasoning_effort": os.environ.get("CODEX_REASONING_EFFORT_INPUT") or "xhigh",
+          }
+
+          def write_outputs(data: dict[str, str]) -> None:
+              output_path = os.environ["GITHUB_OUTPUT"]
+              with open(output_path, "a", encoding="utf-8") as fh:
+                  for key, value in data.items():
+                      fh.write(f"{key}={value}\n")
+
+          def strip_non_triggerable_markdown(text: str) -> str:
+              text = re.sub(r"<!--.*?-->", " ", text, flags=re.S)
+              text = re.sub(r"```.*?```", " ", text, flags=re.S)
+              text = re.sub(r"~~~.*?~~~", " ", text, flags=re.S)
+              text = re.sub(r"(?s)(`+)(.+?)\1", " ", text)
+              text = re.sub(r"(?m)^\s{0,3}>.*$", " ", text)
+              text = re.sub(r"!\[[^\]]*]\([^)]+\)", " ", text)
+              text = re.sub(r"\[[^\]]*]\([^)]+\)", " ", text)
+              text = re.sub(r"https?://\S+", " ", text)
+              return text
+
+          def has_provider_mention(body: str, provider: str) -> bool:
+              handle = trigger_handles[provider]
+              sanitized = strip_non_triggerable_markdown(body)
+              pattern = re.compile(rf"(?<![\w/]){re.escape(handle)}(?![\w-])", re.IGNORECASE)
+              return bool(pattern.search(sanitized))
+
+          BOT_USERS = frozenset({"github-actions[bot]", "dependabot[bot]"})
+
+          def is_bot_author(author: str) -> bool:
+              return author in BOT_USERS or author.endswith("[bot]")
+
+          def resolve_permission() -> tuple[bool, str]:
+              if event_name == "workflow_dispatch":
+                  return True, "manual-dispatch"
+              cmd = [
+                  "gh",
+                  "api",
+                  f"repos/{repository}/collaborators/{actor}/permission",
+                  "--jq",
+                  ".permission",
+              ]
+              try:
+                  permission = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+              except subprocess.CalledProcessError:
+                  permission = "none"
+              return permission in {"admin", "maintain", "write"}, permission
+
+          def resolve_assistant_login() -> str:
+              try:
+                  return subprocess.check_output(
+                      ["gh", "api", "user", "--jq", ".login"],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  ).strip()
+              except subprocess.CalledProcessError:
+                  return ""
+
+          def should_ignore_comment_author(comment_author: str) -> bool:
+              return comment_author.endswith("[bot]") or (
+                  assistant_login != "" and comment_author == assistant_login
+              )
+
+          authorized, permission = resolve_permission()
+          print(f"Resolved actor permission: {permission}")
+          if not authorized:
+              print("Actor is not authorized for direct CLI review actions; workflow will skip.")
+              write_outputs(outputs)
+              raise SystemExit(0)
+
+          assistant_login = resolve_assistant_login()
+          if assistant_login:
+              print(f"Resolved assistant login: {assistant_login}")
+
+          if event_name == "workflow_dispatch":
+              provider = os.environ.get("DISPATCH_PROVIDER") or "both"
+              trigger_type = os.environ.get("DISPATCH_TRIGGER_TYPE") or "pr_event"
+              target_pr_number = os.environ.get("DISPATCH_PR_NUMBER", "").strip()
+              if not target_pr_number:
+                  raise SystemExit("workflow_dispatch requires pr_number")
+
+              outputs["should_run"] = "true"
+              outputs["target_pr_number"] = target_pr_number
+              outputs["trigger_type"] = trigger_type
+              outputs["comment_author"] = os.environ.get("DISPATCH_COMMENT_AUTHOR") or "manual-dispatch"
+              if trigger_type == "inline_comment":
+                  outputs["comment_id"] = os.environ.get("DISPATCH_COMMENT_ID", "").strip()
+                  outputs["file_path"] = os.environ.get("DISPATCH_FILE_PATH", "").strip()
+                  outputs["line_number"] = os.environ.get("DISPATCH_LINE_NUMBER", "").strip()
+              else:
+                  outputs["comment_id"] = ""
+                  outputs["file_path"] = ""
+                  outputs["line_number"] = ""
+
+              comment_body = os.environ.get("DISPATCH_COMMENT_BODY", "")
+              if trigger_type == "pr_event" and not comment_body:
+                  comment_body = "PR marked as ready for review"
+              outputs["comment_body_b64"] = base64.b64encode(comment_body.encode("utf-8")).decode("ascii")
+
+              if provider == "both":
+                  outputs["run_claude"] = "true"
+                  outputs["run_codex"] = "true"
+              elif provider == "claude":
+                  outputs["run_claude"] = "true"
+              elif provider == "codex":
+                  outputs["run_codex"] = "true"
+              else:
+                  raise SystemExit(f"Unsupported provider input: {provider}")
+
+          elif event_name == "issue_comment":
+              issue = event.get("issue", {})
+              if "pull_request" not in issue:
+                  print("Issue comment is not on a PR; skipping.")
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              body = event["comment"]["body"]
+              comment_author = event["comment"]["user"]["login"]
+              if should_ignore_comment_author(comment_author):
+                  print(f"Ignoring assistant-authored or bot-authored PR comment from {comment_author}; skipping.")
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              outputs["target_pr_number"] = str(issue["number"])
+              outputs["trigger_type"] = "pr_comment"
+              outputs["comment_author"] = comment_author
+              outputs["comment_id"] = ""
+              outputs["comment_body_b64"] = base64.b64encode(body.encode("utf-8")).decode("ascii")
+
+              if is_bot_author(outputs["comment_author"]):
+                  print(f"Comment author {outputs['comment_author']} is a bot; skipping to prevent self-triggering.")
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              run_claude = has_provider_mention(body, "claude")
+              run_codex = has_provider_mention(body, "codex")
+              if not run_claude and not run_codex:
+                  print(
+                      f"No {trigger_handles['claude']} or {trigger_handles['codex']} mention found in PR comment; skipping."
+                  )
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              outputs["should_run"] = "true"
+              outputs["run_claude"] = "true" if run_claude else "false"
+              outputs["run_codex"] = "true" if run_codex else "false"
+
+          elif event_name == "pull_request_review_comment":
+              body = event["comment"]["body"]
+              comment_author = event["comment"]["user"]["login"]
+              if should_ignore_comment_author(comment_author):
+                  print(
+                      f"Ignoring assistant-authored or bot-authored inline review comment from {comment_author}; skipping."
+                  )
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              outputs["target_pr_number"] = str(event["pull_request"]["number"])
+              outputs["trigger_type"] = "inline_comment"
+              outputs["comment_author"] = comment_author
+              outputs["comment_id"] = str(event["comment"]["id"])
+              outputs["file_path"] = event["comment"].get("path", "")
+              outputs["line_number"] = str(
+                  event["comment"].get("line") or event["comment"].get("original_line") or ""
+              )
+              outputs["comment_body_b64"] = base64.b64encode(body.encode("utf-8")).decode("ascii")
+
+              if is_bot_author(outputs["comment_author"]):
+                  print(f"Inline comment author {outputs['comment_author']} is a bot; skipping to prevent self-triggering.")
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              run_claude = has_provider_mention(body, "claude")
+              run_codex = has_provider_mention(body, "codex")
+              if not run_claude and not run_codex:
+                  print(
+                      f"No {trigger_handles['claude']} or {trigger_handles['codex']} mention found in inline review comment; skipping."
+                  )
+                  write_outputs(outputs)
+                  raise SystemExit(0)
+
+              outputs["should_run"] = "true"
+              outputs["run_claude"] = "true" if run_claude else "false"
+              outputs["run_codex"] = "true" if run_codex else "false"
+
+          else:
+              print(f"Unsupported event combination: {event_name}/{event_action}; skipping.")
+              write_outputs(outputs)
+              raise SystemExit(0)
+
+          if outputs["trigger_type"] == "inline_comment" and not outputs["comment_id"]:
+              raise SystemExit("Inline comment reviews require comment_id")
+
+          write_outputs(outputs)
+          PY
+
+  claude-direct-cli:
+    name: Claude direct CLI code review
+    needs: resolve-context
+    if: ${{ needs.resolve-context.outputs.should_run == 'true' && needs.resolve-context.outputs.run_claude == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
+      TRIGGER_TYPE: ${{ needs.resolve-context.outputs.trigger_type }}
+      COMMENT_BODY_B64: ${{ needs.resolve-context.outputs.comment_body_b64 }}
+      COMMENT_AUTHOR: ${{ needs.resolve-context.outputs.comment_author }}
+      COMMENT_ID: ${{ needs.resolve-context.outputs.comment_id }}
+      FILE_PATH: ${{ needs.resolve-context.outputs.file_path }}
+      LINE_NUMBER: ${{ needs.resolve-context.outputs.line_number }}
+      CLAUDE_POC_VERSION: ${{ needs.resolve-context.outputs.claude_version }}
+      CLAUDE_MODEL: ${{ needs.resolve-context.outputs.claude_model }}
+      CLAUDE_EFFORT: ${{ needs.resolve-context.outputs.claude_effort }}
+      COMMENT_MARKER: direct-cli-review:claude
+      SUMMARY_FILE_PATH: ${{ github.workspace }}/tmp/claude-pr-comment.md
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Claude auth input
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "Need CLAUDE_CODE_OAUTH_TOKEN to run the direct Claude CLI review workflow." >&2
+            exit 1
+          fi
+
+      - name: Validate Perplexity auth input
+        env:
+          PPLX_API_KEY: ${{ secrets.PPLX_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PPLX_API_KEY:-}" ]; then
+            echo "Need PPLX_API_KEY to give the direct Claude CLI review workflow a ground-truth web search tool." >&2
+            exit 1
+          fi
+
+      - name: Install pplx CLI
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64|amd64) pplx_arch="amd64" ;;
+            aarch64|arm64) pplx_arch="arm64" ;;
+            *)
+              echo "Unsupported architecture for pplx install: $arch" >&2
+              exit 1
+              ;;
+          esac
+          asset_name="pplx_${PPLX_VERSION}_linux_${pplx_arch}"
+          release_url="https://github.com/sgaunet/pplx/releases/download/v${PPLX_VERSION}"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            "${release_url}/${asset_name}" -o "${asset_name}"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            "${release_url}/checksums.txt" -o checksums.txt
+          grep " ${asset_name}$" checksums.txt | sha256sum -c -
+          install -m 0755 "${asset_name}" /usr/local/bin/pplx
+          pplx version
+
+      - name: Fetch PR metadata
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" > pr.json
+
+      - name: Capture Claude verification baseline
+        id: claude-baseline
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr_number = os.environ["TARGET_PR_NUMBER"]
+          marker = os.environ["COMMENT_MARKER"]
+          comment_id = os.environ.get("COMMENT_ID", "")
+          trigger_type = os.environ.get("TRIGGER_TYPE", "")
+
+          def gh_json(path: str):
+              data = subprocess.check_output(
+                  ["gh", "api", "--paginate", "--slurp", path],
+                  text=True,
+              )
+              pages = json.loads(data)
+              items = []
+              for page in pages:
+                  if isinstance(page, list):
+                      items.extend(page)
+                  else:
+                      items.append(page)
+              return items
+
+          bot_login = subprocess.check_output(
+              ["gh", "api", "user", "--jq", ".login"],
+              text=True,
+          ).strip()
+          issue_comments = gh_json(f"repos/{repo}/issues/{pr_number}/comments")
+          pr_comment_baseline_id = max(
+              [
+                  int(comment["id"])
+                  for comment in issue_comments
+                  if comment.get("user", {}).get("login") == bot_login
+                  and f"<!-- {marker} -->" in (comment.get("body") or "")
+              ]
+              or [0]
+          )
+
+          inline_reply_baseline_id = 0
+          if trigger_type == "inline_comment" and comment_id:
+              inline_comments = gh_json(f"repos/{repo}/pulls/{pr_number}/comments")
+              trigger_comment = json.loads(
+                  subprocess.check_output(
+                      ["gh", "api", f"repos/{repo}/pulls/comments/{comment_id}"],
+                      text=True,
+                  )
+              )
+              acceptable_reply_to_ids = {comment_id}
+              parent_comment_id = str(trigger_comment.get("in_reply_to_id") or "")
+              if parent_comment_id:
+                  acceptable_reply_to_ids.add(parent_comment_id)
+              inline_reply_baseline_id = max(
+                  [
+                      int(comment["id"])
+                      for comment in inline_comments
+                      if comment.get("user", {}).get("login") == bot_login
+                      and str(comment.get("in_reply_to_id") or "") in acceptable_reply_to_ids
+                  ]
+                  or [0]
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"bot_login={bot_login}\n")
+              fh.write(f"pr_comment_baseline_id={pr_comment_baseline_id}\n")
+              fh.write(f"inline_reply_baseline_id={inline_reply_baseline_id}\n")
+          PY
+
+      - name: Build Claude review prompt
+        env:
+          OUTPUT_PREFIX: CLAUDE_REVIEW
+          PROVIDER_LABEL: Claude
+          COMMENT_MARKER: ${{ env.COMMENT_MARKER }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64
+          import json
+          import os
+          import textwrap
+
+          with open("pr.json", "r", encoding="utf-8") as fh:
+              pr = json.load(fh)
+
+          comment_body = base64.b64decode(os.environ["COMMENT_BODY_B64"]).decode("utf-8") if os.environ.get("COMMENT_BODY_B64") else ""
+          trigger_type = os.environ["TRIGGER_TYPE"]
+          provider = os.environ["PROVIDER_LABEL"]
+          output_prefix = os.environ["OUTPUT_PREFIX"]
+          comment_marker = os.environ["COMMENT_MARKER"]
+          summary_file_path = os.environ["SUMMARY_FILE_PATH"]
+
+          trigger_instructions = {
+              "pr_event": textwrap.dedent(
+                  f"""\
+                  This PR has been marked as ready for review.
+
+                  Perform a full code review of the changed diff and any surrounding code you need
+                  to understand the change. Leave inline comments ONLY for actionable issues that
+                  should be fixed or changed. Do not leave inline comments for praise.
+
+                  After the review, prepare exactly one top-level PR summary comment body in:
+                  {summary_file_path}
+
+                  The workflow wrapper will post that body as the top-level PR comment and inject
+                  this hidden marker for you:
+                  <!-- {comment_marker} -->
+
+                  The prepared summary comment body must:
+                  - summarize the most important findings
+                  - explicitly say when no actionable findings were found
+                  - not approve or request changes formally
+                  - not include the hidden marker itself
+
+                  If you cannot confidently place an inline comment on a diff line, put that note
+                  in the prepared summary comment body instead.
+
+                  Do not run `gh pr comment` yourself for that top-level summary comment.
+                  """
+              ),
+              "pr_comment": textwrap.dedent(
+                  f"""\
+                  A user left a top-level PR comment.
+
+                  Comment author: @{os.environ["COMMENT_AUTHOR"]}
+                  Comment body:
+                  <<<COMMENT_START>>>
+                  {comment_body}
+                  <<<COMMENT_END>>>
+
+                  Determine the user's intent.
+                  - If they asked a direct question, answer it in exactly one top-level PR comment
+                    body written to {summary_file_path}.
+                  - If they requested a review or asked you to check the PR, perform the same full
+                    review behavior as the ready-for-review path.
+                  - If they requested a scoped action within review context, perform it and respond.
+
+                  Any top-level response comment body must be written to:
+                  {summary_file_path}
+
+                  Do not include the hidden marker in that file. The workflow wrapper will inject:
+                  <!-- {comment_marker} -->
+
+                  Do not run `gh pr comment` yourself for that top-level response.
+                  """
+              ),
+              "inline_comment": textwrap.dedent(
+                  f"""\
+                  A user left an inline review comment on this PR.
+
+                  Comment author: @{os.environ["COMMENT_AUTHOR"]}
+                  File: {os.environ["FILE_PATH"]}:{os.environ["LINE_NUMBER"]}
+                  Comment id: {os.environ["COMMENT_ID"]}
+                  Comment body:
+                  <<<COMMENT_START>>>
+                  {comment_body}
+                  <<<COMMENT_END>>>
+
+                  Read the relevant diff and surrounding file context, then post exactly one
+                  threaded inline reply using the existing inline comment id.
+
+                  Do not post a top-level PR summary comment unless the user explicitly asked for a
+                  wider review. If they explicitly asked for a wider top-level response, write the
+                  comment body to {summary_file_path} for the wrapper to post, without the hidden
+                  marker.
+                  """
+              ),
+          }[trigger_type]
+
+          prompt = textwrap.dedent(
+              f"""\
+              You are {provider} operating as a direct CLI GitHub code reviewer.
+              Review code, not just PR metadata.
+
+              You may inspect the checked-out repository, the PR diff, changed files, CI status,
+              existing PR comments, and existing inline review comments. You may use shell commands
+              for read-only inspection plus GitHub commenting commands. Do not edit files, do not
+              commit, and do not push changes.
+
+              REPOSITORY: {os.environ["GITHUB_REPOSITORY"]}
+              PR_NUMBER: {os.environ["TARGET_PR_NUMBER"]}
+              TRIGGER_TYPE: {trigger_type}
+              PR_TITLE: "{pr["title"]}"
+              PR_AUTHOR: {pr["user"]["login"]}
+              PR_URL: {pr["html_url"]}
+              BASE_REF: {pr["base"]["ref"]}
+              HEAD_REF: {pr["head"]["ref"]}
+              HEAD_SHA: {pr["head"]["sha"]}
+
+              PR_BODY (between delimiters):
+              <<<PR_BODY_START>>>
+              {pr.get("body") or ""}
+              <<<PR_BODY_END>>>
+
+              Review expectations:
+              - Focus on correctness, regressions, security, performance, edge cases, tests, and
+                missing documentation where relevant.
+              - Use inline comments ONLY for actionable findings that should be fixed or changed.
+              - Do not leave inline comments for praise or positive observations.
+              - Avoid duplicate findings by checking existing inline comments from this bot before
+                posting the same path/line comment again.
+              - When a finding depends on external or time-sensitive facts, validate it with
+                `pplx` before you post the finding. Prefer constraining searches to primary
+                sources such as official docs or release notes.
+              - Do not approve or request changes formally in this workflow. Use comments/replies.
+
+              Useful command patterns:
+              - Inspect PR metadata and files:
+                gh pr view "{os.environ["TARGET_PR_NUMBER"]}" --json title,body,author,files,headRefOid,baseRefName,headRefName,url
+                gh pr diff "{os.environ["TARGET_PR_NUMBER"]}" --patch
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/files --paginate
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/comments
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/issues/{os.environ["TARGET_PR_NUMBER"]}/comments
+              - Inspect local checkout:
+                git diff --stat "origin/{pr["base"]["ref"]}...HEAD"
+                git diff "origin/{pr["base"]["ref"]}...HEAD" -- path/to/file
+                rg "pattern" path
+                sed -n 'start,endp' path/to/file
+                cat path/to/file
+              - Validate external ground truth for changing facts:
+                pplx query -m sonar-pro --json -d platform.openai.com,docs.anthropic.com,docs.perplexity.ai,github.com -p 'your question'
+              - Create an inline review comment on a diff line:
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/comments \\
+                  --method POST \\
+                  -f body='Actionable finding' \\
+                  -f commit_id='{pr["head"]["sha"]}' \\
+                  -f path='path/to/file' \\
+                  -F line=123 \\
+                  -f side='RIGHT'
+              - Reply to an existing inline review comment:
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/comments \\
+                  --method POST \\
+                  -f body='Reply text' \\
+                  -F in_reply_to={os.environ["COMMENT_ID"] or 0}
+              - Prepare a top-level PR comment body for the wrapper to post:
+                cat > "{summary_file_path}" <<'EOF'
+                Comment text without the hidden marker
+                EOF
+
+              {trigger_instructions}
+
+              After you finish, output EXACTLY one machine-readable line using this JSON schema:
+              {output_prefix}::{{"triggerType":"pr_event|pr_comment|inline_comment","fullReviewPerformed":true|false,"summaryFileWritten":true|false,"inlineReplyPosted":true|false,"inlineCommentsCreated":0,"success":true|false,"notes":["string"]}}
+
+              Rules:
+              - Set success=true only if you completed the expected GitHub action for this trigger.
+              - Set fullReviewPerformed=true only when you actually inspected the PR diff and code.
+              - Set summaryFileWritten=true only when you wrote a top-level PR comment body to {summary_file_path}.
+              - Set inlineReplyPosted=true only when you posted a threaded reply to an inline review comment.
+              - inlineCommentsCreated must be an integer count.
+              - Never include the hidden marker inside {summary_file_path}; the wrapper injects it.
+              - Put any execution caveats or skipped actions in notes.
+              - Do not include any extra prose before or after the {output_prefix} line.
+              """
+          )
+
+          with open("prompt.txt", "w", encoding="utf-8") as fh:
+              fh.write(prompt)
+          PY
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code CLI
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts "@anthropic-ai/claude-code@${CLAUDE_POC_VERSION}"
+          claude --version
+
+      - name: Run Claude CLI directly
+        id: claude-run
+        env:
+          HOME: ${{ runner.temp }}/claude-home
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+          PPLX_API_KEY: ${{ secrets.PPLX_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$SUMMARY_FILE_PATH")"
+          rm -f "$SUMMARY_FILE_PATH"
+          prompt_content="$(cat prompt.txt)"
+          set +e
+          # CI review runs are non-interactive, so Claude cannot pause for approvals.
+          # Bash access is restricted to repo inspection and the job token is least-privilege scoped.
+          claude \
+            -p \
+            --model "${CLAUDE_MODEL}" \
+            --effort "${CLAUDE_EFFORT}" \
+            --setting-sources user \
+            --permission-mode bypassPermissions \
+            --allowedTools 'Bash' \
+            --disable-slash-commands \
+            "$prompt_content" \
+            > claude-output.txt \
+            2> claude-error.txt
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Claude Direct CLI Code Review"
+            echo
+            echo "- PR: #${TARGET_PR_NUMBER}"
+            echo "- Trigger type: ${TRIGGER_TYPE}"
+            echo "- Claude version: ${CLAUDE_POC_VERSION}"
+            echo "- Claude model: ${CLAUDE_MODEL}"
+            echo "- Claude effort: ${CLAUDE_EFFORT}"
+            echo "- Exit code: $status"
+            echo
+            echo '```'
+            cat claude-output.txt
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            cat claude-error.txt >&2
+            exit "$status"
+          fi
+          cat claude-output.txt
+
+      - name: Parse Claude review result
+        id: claude-parse
+        env:
+          TRIGGER_TYPE: ${{ env.TRIGGER_TYPE }}
+        run: |
+          set -euo pipefail
+          review_line="$(grep '^CLAUDE_REVIEW::' claude-output.txt | tail -n 1 || true)"
+          if [ -z "$review_line" ]; then
+            echo "Claude output did not contain a CLAUDE_REVIEW line." >&2
+            exit 1
+          fi
+
+          review_json="${review_line#CLAUDE_REVIEW::}"
+          printf '%s\n' "$review_json" > claude-review.json
+          jq . claude-review.json > /dev/null
+
+          success="$(jq -r '.success' claude-review.json)"
+          full_review="$(jq -r '.fullReviewPerformed' claude-review.json)"
+          summary_file_written="$(jq -r '.summaryFileWritten' claude-review.json)"
+          inline_reply_posted="$(jq -r '.inlineReplyPosted' claude-review.json)"
+
+          {
+            echo
+            echo "Parsed Claude review:"
+            echo
+            echo '```json'
+            cat claude-review.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "summary_file_written=$summary_file_written"
+            echo "inline_reply_posted=$inline_reply_posted"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$success" != "true" ]; then
+            echo "Claude reported success=false for trigger ${TRIGGER_TYPE}." >&2
+            exit 1
+          fi
+
+          case "$TRIGGER_TYPE" in
+            pr_event)
+              if [ "$full_review" != "true" ] || [ "$summary_file_written" != "true" ]; then
+                echo "Claude did not complete the expected full review + summary comment preparation flow." >&2
+                exit 1
+              fi
+              ;;
+            pr_comment)
+              if [ "$summary_file_written" != "true" ]; then
+                echo "Claude did not prepare a top-level PR response comment body." >&2
+                exit 1
+              fi
+              ;;
+            inline_comment)
+              if [ "$inline_reply_posted" != "true" ]; then
+                echo "Claude did not post an inline threaded reply." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported trigger type ${TRIGGER_TYPE}." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Post Claude PR response comment
+        if: ${{ steps.claude-parse.outputs.summary_file_written == 'true' }}
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+          SUMMARY_FILE_PATH: ${{ env.SUMMARY_FILE_PATH }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          summary_path = Path(os.environ["SUMMARY_FILE_PATH"])
+          if not summary_path.exists():
+              raise SystemExit(f"Claude indicated a PR response was prepared, but {summary_path} does not exist.")
+
+          body = summary_path.read_text(encoding="utf-8").strip()
+          if not body:
+              raise SystemExit(f"Claude indicated a PR response was prepared, but {summary_path} is empty.")
+
+          marker = os.environ["COMMENT_MARKER"]
+          rendered = f"<!-- {marker} -->\n\n{body}\n"
+          Path("claude-comment-body.txt").write_text(rendered, encoding="utf-8")
+          PY
+          gh pr comment "$TARGET_PR_NUMBER" --body-file claude-comment-body.txt
+
+      - name: Verify Claude GitHub side effects
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+          TRIGGER_TYPE: ${{ env.TRIGGER_TYPE }}
+          COMMENT_ID: ${{ env.COMMENT_ID }}
+          COMMENT_MARKER: ${{ env.COMMENT_MARKER }}
+          BOT_LOGIN: ${{ steps.claude-baseline.outputs.bot_login }}
+          PR_COMMENT_BASELINE_ID: ${{ steps.claude-baseline.outputs.pr_comment_baseline_id }}
+          INLINE_REPLY_BASELINE_ID: ${{ steps.claude-baseline.outputs.inline_reply_baseline_id }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr_number = os.environ["TARGET_PR_NUMBER"]
+          trigger_type = os.environ["TRIGGER_TYPE"]
+          marker = os.environ["COMMENT_MARKER"]
+          bot_login = os.environ["BOT_LOGIN"]
+          comment_id = os.environ.get("COMMENT_ID", "")
+          pr_comment_baseline_id = int(os.environ.get("PR_COMMENT_BASELINE_ID") or "0")
+          inline_reply_baseline_id = int(os.environ.get("INLINE_REPLY_BASELINE_ID") or "0")
+
+          def gh_json(path: str):
+              data = subprocess.check_output(
+                  ["gh", "api", "--paginate", "--slurp", path],
+                  text=True,
+              )
+              pages = json.loads(data)
+              items = []
+              for page in pages:
+                  if isinstance(page, list):
+                      items.extend(page)
+                  else:
+                      items.append(page)
+              return items
+
+          if trigger_type in {"pr_event", "pr_comment"}:
+              issue_comments = gh_json(f"repos/{repo}/issues/{pr_number}/comments")
+              latest_pr_comment_id = max(
+                  [
+                      int(comment["id"])
+                      for comment in issue_comments
+                      if comment.get("user", {}).get("login") == bot_login
+                      and f"<!-- {marker} -->" in (comment.get("body") or "")
+                  ]
+                  or [0]
+              )
+              if latest_pr_comment_id <= pr_comment_baseline_id:
+                  raise SystemExit("No new Claude summary comment with marker was posted.")
+
+          elif trigger_type == "inline_comment":
+              inline_comments = gh_json(f"repos/{repo}/pulls/{pr_number}/comments")
+              trigger_comment = json.loads(
+                  subprocess.check_output(
+                      ["gh", "api", f"repos/{repo}/pulls/comments/{comment_id}"],
+                      text=True,
+                  )
+              )
+              acceptable_reply_to_ids = {comment_id}
+              parent_comment_id = str(trigger_comment.get("in_reply_to_id") or "")
+              if parent_comment_id:
+                  acceptable_reply_to_ids.add(parent_comment_id)
+              latest_inline_reply_id = max(
+                  [
+                      int(comment["id"])
+                      for comment in inline_comments
+                      if comment.get("user", {}).get("login") == bot_login
+                      and str(comment.get("in_reply_to_id") or "") in acceptable_reply_to_ids
+                  ]
+                  or [0]
+              )
+              if latest_inline_reply_id <= inline_reply_baseline_id:
+                  raise SystemExit("No new Claude inline reply was posted.")
+          else:
+              raise SystemExit(f"Unsupported trigger type {trigger_type}")
+          PY
+
+  codex-direct-cli:
+    name: Codex direct CLI code review
+    needs: resolve-context
+    if: ${{ needs.resolve-context.outputs.should_run == 'true' && needs.resolve-context.outputs.run_codex == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
+      TRIGGER_TYPE: ${{ needs.resolve-context.outputs.trigger_type }}
+      COMMENT_BODY_B64: ${{ needs.resolve-context.outputs.comment_body_b64 }}
+      COMMENT_AUTHOR: ${{ needs.resolve-context.outputs.comment_author }}
+      COMMENT_ID: ${{ needs.resolve-context.outputs.comment_id }}
+      FILE_PATH: ${{ needs.resolve-context.outputs.file_path }}
+      LINE_NUMBER: ${{ needs.resolve-context.outputs.line_number }}
+      CODEX_POC_VERSION: ${{ needs.resolve-context.outputs.codex_version }}
+      CODEX_MODEL: ${{ needs.resolve-context.outputs.codex_model }}
+      CODEX_REASONING_EFFORT: ${{ needs.resolve-context.outputs.codex_reasoning_effort }}
+      COMMENT_MARKER: direct-cli-review:codex
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Codex auth input
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CODEX_AUTH_JSON:-}" ]; then
+            echo "Need CODEX_AUTH_JSON to run the direct Codex CLI review workflow." >&2
+            exit 1
+          fi
+
+      - name: Validate Perplexity auth input
+        env:
+          PPLX_API_KEY: ${{ secrets.PPLX_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PPLX_API_KEY:-}" ]; then
+            echo "Need PPLX_API_KEY to give the direct Codex CLI review workflow a ground-truth web search tool." >&2
+            exit 1
+          fi
+
+      - name: Install pplx CLI
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64|amd64) pplx_arch="amd64" ;;
+            aarch64|arm64) pplx_arch="arm64" ;;
+            *)
+              echo "Unsupported architecture for pplx install: $arch" >&2
+              exit 1
+              ;;
+          esac
+          asset_name="pplx_${PPLX_VERSION}_linux_${pplx_arch}"
+          release_url="https://github.com/sgaunet/pplx/releases/download/v${PPLX_VERSION}"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            "${release_url}/${asset_name}" -o "${asset_name}"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --silent --location \
+            "${release_url}/checksums.txt" -o checksums.txt
+          grep " ${asset_name}$" checksums.txt | sha256sum -c -
+          install -m 0755 "${asset_name}" /usr/local/bin/pplx
+          pplx version
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Fetch PR metadata
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" > pr.json
+
+      - name: Capture Codex verification baseline
+        id: codex-baseline
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr_number = os.environ["TARGET_PR_NUMBER"]
+          marker = os.environ["COMMENT_MARKER"]
+          comment_id = os.environ.get("COMMENT_ID", "")
+          trigger_type = os.environ.get("TRIGGER_TYPE", "")
+
+          def gh_json(path: str):
+              data = subprocess.check_output(
+                  ["gh", "api", "--paginate", "--slurp", path],
+                  text=True,
+              )
+              pages = json.loads(data)
+              items = []
+              for page in pages:
+                  if isinstance(page, list):
+                      items.extend(page)
+                  else:
+                      items.append(page)
+              return items
+
+          bot_login = subprocess.check_output(
+              ["gh", "api", "user", "--jq", ".login"],
+              text=True,
+          ).strip()
+          issue_comments = gh_json(f"repos/{repo}/issues/{pr_number}/comments")
+          pr_comment_baseline_id = max(
+              [
+                  int(comment["id"])
+                  for comment in issue_comments
+                  if comment.get("user", {}).get("login") == bot_login
+                  and f"<!-- {marker} -->" in (comment.get("body") or "")
+              ]
+              or [0]
+          )
+
+          inline_reply_baseline_id = 0
+          if trigger_type == "inline_comment" and comment_id:
+              inline_comments = gh_json(f"repos/{repo}/pulls/{pr_number}/comments")
+              trigger_comment = json.loads(
+                  subprocess.check_output(
+                      ["gh", "api", f"repos/{repo}/pulls/comments/{comment_id}"],
+                      text=True,
+                  )
+              )
+              acceptable_reply_to_ids = {comment_id}
+              parent_comment_id = str(trigger_comment.get("in_reply_to_id") or "")
+              if parent_comment_id:
+                  acceptable_reply_to_ids.add(parent_comment_id)
+              inline_reply_baseline_id = max(
+                  [
+                      int(comment["id"])
+                      for comment in inline_comments
+                      if comment.get("user", {}).get("login") == bot_login
+                      and str(comment.get("in_reply_to_id") or "") in acceptable_reply_to_ids
+                  ]
+                  or [0]
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"bot_login={bot_login}\n")
+              fh.write(f"pr_comment_baseline_id={pr_comment_baseline_id}\n")
+              fh.write(f"inline_reply_baseline_id={inline_reply_baseline_id}\n")
+          PY
+
+      - name: Build Codex review prompt
+        env:
+          OUTPUT_PREFIX: CODEX_REVIEW
+          PROVIDER_LABEL: Codex
+          COMMENT_MARKER: ${{ env.COMMENT_MARKER }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64
+          import json
+          import os
+          import textwrap
+
+          with open("pr.json", "r", encoding="utf-8") as fh:
+              pr = json.load(fh)
+
+          comment_body = base64.b64decode(os.environ["COMMENT_BODY_B64"]).decode("utf-8") if os.environ.get("COMMENT_BODY_B64") else ""
+          trigger_type = os.environ["TRIGGER_TYPE"]
+          provider = os.environ["PROVIDER_LABEL"]
+          output_prefix = os.environ["OUTPUT_PREFIX"]
+          comment_marker = os.environ["COMMENT_MARKER"]
+
+          trigger_instructions = {
+              "pr_event": textwrap.dedent(
+                  f"""\
+                  This PR has been marked as ready for review.
+
+                  Perform a full code review of the changed diff and any surrounding code you need
+                  to understand the change. Leave inline comments ONLY for actionable issues that
+                  should be fixed or changed. Do not leave inline comments for praise.
+
+                  After the review, post exactly one top-level PR summary comment that starts with:
+                  <!-- {comment_marker} -->
+
+                  The summary comment must:
+                  - summarize the most important findings
+                  - explicitly say when no actionable findings were found
+                  - not approve or request changes formally
+
+                  If you cannot confidently place an inline comment on a diff line, put that note
+                  in the summary comment instead.
+                  """
+              ),
+              "pr_comment": textwrap.dedent(
+                  f"""\
+                  A user left a top-level PR comment.
+
+                  Comment author: @{os.environ["COMMENT_AUTHOR"]}
+                  Comment body:
+                  <<<COMMENT_START>>>
+                  {comment_body}
+                  <<<COMMENT_END>>>
+
+                  Determine the user's intent.
+                  - If they asked a direct question, answer it in exactly one top-level PR comment.
+                  - If they requested a review or asked you to check the PR, perform the same full
+                    review behavior as the ready-for-review path.
+                  - If they requested a scoped action within review context, perform it and respond.
+
+                  Any top-level response comment must start with:
+                  <!-- {comment_marker} -->
+                  """
+              ),
+              "inline_comment": textwrap.dedent(
+                  f"""\
+                  A user left an inline review comment on this PR.
+
+                  Comment author: @{os.environ["COMMENT_AUTHOR"]}
+                  File: {os.environ["FILE_PATH"]}:{os.environ["LINE_NUMBER"]}
+                  Comment id: {os.environ["COMMENT_ID"]}
+                  Comment body:
+                  <<<COMMENT_START>>>
+                  {comment_body}
+                  <<<COMMENT_END>>>
+
+                  Read the relevant diff and surrounding file context, then post exactly one
+                  threaded inline reply using the existing inline comment id.
+
+                  Do not post a top-level PR summary comment unless the user explicitly asked for a
+                  wider review.
+                  """
+              ),
+          }[trigger_type]
+
+          prompt = textwrap.dedent(
+              f"""\
+              You are {provider} operating as a direct CLI GitHub code reviewer.
+              Review code, not just PR metadata.
+
+              You may inspect the checked-out repository, the PR diff, changed files, CI status,
+              existing PR comments, and existing inline review comments. You may use shell commands
+              for read-only inspection plus GitHub commenting commands. Do not edit files, do not
+              commit, and do not push changes.
+
+              REPOSITORY: {os.environ["GITHUB_REPOSITORY"]}
+              PR_NUMBER: {os.environ["TARGET_PR_NUMBER"]}
+              TRIGGER_TYPE: {trigger_type}
+              PR_TITLE: "{pr["title"]}"
+              PR_AUTHOR: {pr["user"]["login"]}
+              PR_URL: {pr["html_url"]}
+              BASE_REF: {pr["base"]["ref"]}
+              HEAD_REF: {pr["head"]["ref"]}
+              HEAD_SHA: {pr["head"]["sha"]}
+
+              PR_BODY (between delimiters):
+              <<<PR_BODY_START>>>
+              {pr.get("body") or ""}
+              <<<PR_BODY_END>>>
+
+              Review expectations:
+              - Focus on correctness, regressions, security, performance, edge cases, tests, and
+                missing documentation where relevant.
+              - Use inline comments ONLY for actionable findings that should be fixed or changed.
+              - Do not leave inline comments for praise or positive observations.
+              - Avoid duplicate findings by checking existing inline comments from this bot before
+                posting the same path/line comment again.
+              - When a finding depends on external or time-sensitive facts, validate it with
+                `pplx` before you post the finding. Prefer constraining searches to primary
+                sources such as official docs or release notes.
+              - Do not approve or request changes formally in this workflow. Use comments/replies.
+
+              Useful command patterns:
+              - Inspect PR metadata and files:
+                gh pr view "{os.environ["TARGET_PR_NUMBER"]}" --json title,body,author,files,headRefOid,baseRefName,headRefName,url
+                gh pr diff "{os.environ["TARGET_PR_NUMBER"]}" --patch
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/files --paginate
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/comments
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/issues/{os.environ["TARGET_PR_NUMBER"]}/comments
+              - Inspect local checkout:
+                git diff --stat "origin/{pr["base"]["ref"]}...HEAD"
+                git diff "origin/{pr["base"]["ref"]}...HEAD" -- path/to/file
+                rg "pattern" path
+                sed -n 'start,endp' path/to/file
+                cat path/to/file
+              - Validate external ground truth for changing facts:
+                pplx query -m sonar-pro --json -d platform.openai.com,docs.anthropic.com,docs.perplexity.ai,github.com -p 'your question'
+              - Create an inline review comment on a diff line:
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/comments \\
+                  --method POST \\
+                  -f body='Actionable finding' \\
+                  -f commit_id='{pr["head"]["sha"]}' \\
+                  -f path='path/to/file' \\
+                  -F line=123 \\
+                  -f side='RIGHT'
+              - Reply to an existing inline review comment:
+                gh api /repos/{os.environ["GITHUB_REPOSITORY"]}/pulls/{os.environ["TARGET_PR_NUMBER"]}/comments \\
+                  --method POST \\
+                  -f body='Reply text' \\
+                  -F in_reply_to={os.environ["COMMENT_ID"] or 0}
+              - Post a top-level PR comment:
+                gh pr comment "{os.environ["TARGET_PR_NUMBER"]}" --body 'Comment text'
+
+              {trigger_instructions}
+
+              After you finish, output EXACTLY one machine-readable line using this JSON schema:
+              {output_prefix}::{{"triggerType":"pr_event|pr_comment|inline_comment","fullReviewPerformed":true|false,"prCommentPosted":true|false,"inlineReplyPosted":true|false,"inlineCommentsCreated":0,"success":true|false,"notes":["string"]}}
+
+              Rules:
+              - Set success=true only if you completed the expected GitHub action for this trigger.
+              - Set fullReviewPerformed=true only when you actually inspected the PR diff and code.
+              - Set prCommentPosted=true only when you posted a top-level PR comment.
+              - Set inlineReplyPosted=true only when you posted a threaded reply to an inline review comment.
+              - inlineCommentsCreated must be an integer count.
+              - Put any execution caveats or skipped actions in notes.
+              - Do not include any extra prose before or after the {output_prefix} line.
+              """
+          )
+
+          with open("prompt.txt", "w", encoding="utf-8") as fh:
+              fh.write(prompt)
+          PY
+
+      - name: Install Codex CLI
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts "@openai/codex@${CODEX_POC_VERSION}"
+          codex --version
+
+      - name: Configure Codex authentication
+        env:
+          HOME: ${{ runner.temp }}/codex-home
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.codex"
+          printf '%s' "$CODEX_AUTH_JSON" > "$HOME/.codex/auth.json"
+          chmod 600 "$HOME/.codex/auth.json"
+          codex login status
+
+      - name: Run Codex CLI directly
+        id: codex-run
+        env:
+          HOME: ${{ runner.temp }}/codex-home
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+          PPLX_API_KEY: ${{ secrets.PPLX_API_KEY }}
+        run: |
+          set -euo pipefail
+          prompt_content="$(cat prompt.txt)"
+          set +e
+          # Codex runs unattended in Actions, so approval/sandbox prompts must be bypassed.
+          # Side effects stay bounded by the wrapper logic plus scoped GitHub permissions.
+          codex exec \
+            --model "${CODEX_MODEL}" \
+            -c "model_reasoning_effort=\"${CODEX_REASONING_EFFORT}\"" \
+            --dangerously-bypass-approvals-and-sandbox \
+            -o codex-output.txt \
+            "$prompt_content" \
+            > codex-stdout.txt \
+            2> codex-error.txt
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Codex Direct CLI Code Review"
+            echo
+            echo "- PR: #${TARGET_PR_NUMBER}"
+            echo "- Trigger type: ${TRIGGER_TYPE}"
+            echo "- Codex version: ${CODEX_POC_VERSION}"
+            echo "- Codex model: ${CODEX_MODEL}"
+            echo "- Codex reasoning effort: ${CODEX_REASONING_EFFORT}"
+            echo "- Exit code: $status"
+            echo
+            echo '```'
+            cat codex-output.txt
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            cat codex-error.txt >&2
+            exit "$status"
+          fi
+          cat codex-output.txt
+
+      - name: Parse Codex review result
+        env:
+          TRIGGER_TYPE: ${{ env.TRIGGER_TYPE }}
+        run: |
+          set -euo pipefail
+          review_line="$(grep '^CODEX_REVIEW::' codex-output.txt | tail -n 1 || true)"
+          if [ -z "$review_line" ]; then
+            echo "Codex output did not contain a CODEX_REVIEW line." >&2
+            exit 1
+          fi
+
+          review_json="${review_line#CODEX_REVIEW::}"
+          printf '%s\n' "$review_json" > codex-review.json
+          jq . codex-review.json > /dev/null
+
+          success="$(jq -r '.success' codex-review.json)"
+          full_review="$(jq -r '.fullReviewPerformed' codex-review.json)"
+          pr_comment_posted="$(jq -r '.prCommentPosted' codex-review.json)"
+          inline_reply_posted="$(jq -r '.inlineReplyPosted' codex-review.json)"
+
+          {
+            echo
+            echo "Parsed Codex review:"
+            echo
+            echo '```json'
+            cat codex-review.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$success" != "true" ]; then
+            echo "Codex reported success=false for trigger ${TRIGGER_TYPE}." >&2
+            exit 1
+          fi
+
+          case "$TRIGGER_TYPE" in
+            pr_event)
+              if [ "$full_review" != "true" ] || [ "$pr_comment_posted" != "true" ]; then
+                echo "Codex did not complete the expected full review + summary comment flow." >&2
+                exit 1
+              fi
+              ;;
+            pr_comment)
+              if [ "$pr_comment_posted" != "true" ]; then
+                echo "Codex did not post a top-level PR response comment." >&2
+                exit 1
+              fi
+              ;;
+            inline_comment)
+              if [ "$inline_reply_posted" != "true" ]; then
+                echo "Codex did not post an inline threaded reply." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported trigger type ${TRIGGER_TYPE}." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify Codex GitHub side effects
+        env:
+          GH_TOKEN: ${{ env.REVIEW_GH_TOKEN }}
+          TRIGGER_TYPE: ${{ env.TRIGGER_TYPE }}
+          COMMENT_ID: ${{ env.COMMENT_ID }}
+          COMMENT_MARKER: ${{ env.COMMENT_MARKER }}
+          BOT_LOGIN: ${{ steps.codex-baseline.outputs.bot_login }}
+          PR_COMMENT_BASELINE_ID: ${{ steps.codex-baseline.outputs.pr_comment_baseline_id }}
+          INLINE_REPLY_BASELINE_ID: ${{ steps.codex-baseline.outputs.inline_reply_baseline_id }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr_number = os.environ["TARGET_PR_NUMBER"]
+          trigger_type = os.environ["TRIGGER_TYPE"]
+          marker = os.environ["COMMENT_MARKER"]
+          bot_login = os.environ["BOT_LOGIN"]
+          comment_id = os.environ.get("COMMENT_ID", "")
+          pr_comment_baseline_id = int(os.environ.get("PR_COMMENT_BASELINE_ID") or "0")
+          inline_reply_baseline_id = int(os.environ.get("INLINE_REPLY_BASELINE_ID") or "0")
+
+          def gh_json(path: str):
+              data = subprocess.check_output(
+                  ["gh", "api", "--paginate", "--slurp", path],
+                  text=True,
+              )
+              pages = json.loads(data)
+              items = []
+              for page in pages:
+                  if isinstance(page, list):
+                      items.extend(page)
+                  else:
+                      items.append(page)
+              return items
+
+          if trigger_type in {"pr_event", "pr_comment"}:
+              issue_comments = gh_json(f"repos/{repo}/issues/{pr_number}/comments")
+              latest_pr_comment_id = max(
+                  [
+                      int(comment["id"])
+                      for comment in issue_comments
+                      if comment.get("user", {}).get("login") == bot_login
+                      and f"<!-- {marker} -->" in (comment.get("body") or "")
+                  ]
+                  or [0]
+              )
+              if latest_pr_comment_id <= pr_comment_baseline_id:
+                  raise SystemExit("No new Codex summary comment with marker was posted.")
+
+          elif trigger_type == "inline_comment":
+              inline_comments = gh_json(f"repos/{repo}/pulls/{pr_number}/comments")
+              trigger_comment = json.loads(
+                  subprocess.check_output(
+                      ["gh", "api", f"repos/{repo}/pulls/comments/{comment_id}"],
+                      text=True,
+                  )
+              )
+              acceptable_reply_to_ids = {comment_id}
+              parent_comment_id = str(trigger_comment.get("in_reply_to_id") or "")
+              if parent_comment_id:
+                  acceptable_reply_to_ids.add(parent_comment_id)
+              latest_inline_reply_id = max(
+                  [
+                      int(comment["id"])
+                      for comment in inline_comments
+                      if comment.get("user", {}).get("login") == bot_login
+                      and str(comment.get("in_reply_to_id") or "") in acceptable_reply_to_ids
+                  ]
+                  or [0]
+              )
+              if latest_inline_reply_id <= inline_reply_baseline_id:
+                  raise SystemExit("No new Codex inline reply was posted.")
+          else:
+              raise SystemExit(f"Unsupported trigger type {trigger_type}")
+          PY
+# yamllint enable rule:line-length

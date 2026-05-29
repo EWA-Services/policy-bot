@@ -1,0 +1,29 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+extends: default
+
+ignore: |
+  helm-charts/*/templates/*.yaml
+  helm-charts/*/templates/**/*.yaml
+rules:
+  braces:
+    max-spaces-inside: 1
+    min-spaces-inside: 0
+  comments: enable
+  empty-values: enable
+  indentation:
+    indent-sequences: consistent
+  key-duplicates: enable
+  line-length:
+    max: 120
+    level: error
+  new-line-at-end-of-file: enable
+  quoted-strings:
+    quote-type: double
+    required: only-when-needed
+    extra-required: []
+  trailing-spaces: enable
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false

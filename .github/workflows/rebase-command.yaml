@@ -1,0 +1,77 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: rebase-command
+on:
+  repository_dispatch:
+    types: [rebase-command]
+
+permissions:
+  contents: write       # To checkout and push rebased code
+  pull-requests: write  # To comment on PRs
+
+jobs:
+  rebase:
+    runs-on: finn-runners
+    steps:
+      - name: Setup GPG for signed commits
+        uses: EWA-Services/EWA-Actions/.github/actions/verified-commit@main
+        with:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+
+      - name: Checkout PR
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          fetch-depth: 0
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+          ref: ${{ github.event.client_payload.pull_request.head.ref }}
+
+      - name: Rebase with signed commits
+        id: rebase
+        run: |
+          BASE_BRANCH="${{ github.event.client_payload.pull_request.base.ref }}"
+          git fetch origin "$BASE_BRANCH"
+
+          export GIT_SEQUENCE_EDITOR=':'
+
+          if git rebase -i --committer-date-is-author-date \
+            --exec 'git commit --amend --no-edit --gpg-sign' \
+            "origin/$BASE_BRANCH"; then
+            echo "rebased=true" >> $GITHUB_OUTPUT
+            echo "rebased-count=1" >> $GITHUB_OUTPUT
+            git push --force-with-lease origin HEAD
+          else
+            echo "rebased=false" >> $GITHUB_OUTPUT
+            echo "rebased-count=0" >> $GITHUB_OUTPUT
+            git rebase --abort
+          fi
+
+      - name: Add reaction
+        if: steps.rebase.outputs.rebased == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+          comment-id: ${{ github.event.client_payload.github.payload.comment.id }}
+          reactions: hooray
+
+      - name: Comment on failure
+        if: steps.rebase.outputs.rebased == 'false'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
+          issue-number: ${{ github.event.client_payload.pull_request.number }}
+          body: |
+            ❌ Failed to rebase PR due to conflicts.
+
+            Please resolve conflicts locally:
+            ```bash
+            git fetch origin
+            git rebase \
+              origin/${{ github.event.client_payload.pull_request.base.ref }}
+            git push --force-with-lease
+            ```

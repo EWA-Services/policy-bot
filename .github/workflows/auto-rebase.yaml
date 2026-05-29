@@ -1,0 +1,78 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: Auto Rebase
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write      # To checkout code and push rebased branches
+  pull-requests: read  # To list open PRs
+
+jobs:
+  rebase:
+    runs-on: finn-runners
+    steps:
+      - name: Setup GPG for signed commits
+        uses: EWA-Services/EWA-Actions/.github/actions/verified-commit@main
+        with:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          fetch-depth: 0
+
+      - name: Get open PRs
+        id: prs
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: 'main'
+            });
+
+            // Filter out draft PRs
+            const nonDraftPRs = prs.filter(pr => !pr.draft);
+
+            core.setOutput('pr_list', JSON.stringify(nonDraftPRs.map(pr => ({
+              number: pr.number,
+              head_ref: pr.head.ref,
+              head_sha: pr.head.sha
+            }))));
+
+      - name: Rebase PRs
+        run: |
+          PRS='${{ steps.prs.outputs.pr_list }}'
+
+          echo "$PRS" | jq -c '.[]' | while read -r pr; do
+            PR_NUMBER=$(echo "$pr" | jq -r '.number')
+            HEAD_REF=$(echo "$pr" | jq -r '.head_ref')
+
+            echo "Processing PR #$PR_NUMBER ($HEAD_REF)"
+
+            git fetch origin "$HEAD_REF"
+            git checkout -B "$HEAD_REF" "origin/$HEAD_REF"
+
+            export GIT_SEQUENCE_EDITOR=':'
+
+            if git rebase -i --committer-date-is-author-date \
+              --exec 'git commit --amend --no-edit --gpg-sign' \
+              "origin/main"; then
+              echo "✅ Successfully rebased PR #$PR_NUMBER"
+              git push --force-with-lease origin HEAD:"$HEAD_REF"
+            else
+              echo "❌ Failed to rebase PR #$PR_NUMBER (conflicts)"
+              git rebase --abort
+            fi
+
+            git checkout main
+          done

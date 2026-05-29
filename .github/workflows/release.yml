@@ -1,0 +1,63 @@
+name: Release
+on:
+  push:
+    branches:
+      - main
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          gpg_private_key: ${{ secrets.FINN_DEVOPS_BOT_GPG_PRIVATE_KEY }}
+
+      - name: Run Release Please
+        uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Sign release-please PR commits
+        if: steps.release.outputs.prs_created
+        env:
+          PRS_DATA: ${{ steps.release.outputs.prs }}
+          GITHUB_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          echo "$PRS_DATA" | jq -c '.[]' | while read -r pr; do
+            PR_BRANCH=$(echo "$pr" | jq -r '.headBranchName')
+            PR_NUMBER=$(echo "$pr" | jq -r '.number')
+            echo "Processing PR #$PR_NUMBER on branch: $PR_BRANCH"
+
+            git fetch origin
+            git checkout "$PR_BRANCH"
+
+            BASE_COMMIT=$(git merge-base main HEAD)
+
+            export GIT_SEQUENCE_EDITOR=':'
+            git rebase -i --committer-date-is-author-date \
+              --exec 'git commit --amend --no-edit --gpg-sign' "$BASE_COMMIT"
+
+            gh pr edit "$PR_NUMBER" --add-label "automerge"
+
+            git push --force-with-lease origin HEAD
+          done
+
+      - name: Output release information
+        if: steps.release.outputs.release_created
+        run: |
+          echo "Release created: ${{ steps.release.outputs.tag_name }}"
+          echo "Release URL: ${{ steps.release.outputs.html_url }}"
