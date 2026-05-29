@@ -1,0 +1,26 @@
+---
+repos:
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+      - id: end-of-file-fixer
+
+  # YAML linting
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+
+  # GitGuardian secret scanning
+  - repo: https://github.com/gitguardian/ggshield
+    rev: v1.43.0
+    hooks:
+      - id: ggshield
+        language_version: python3
+        stages: [pre-commit]
