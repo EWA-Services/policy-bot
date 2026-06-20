@@ -7,5 +7,5 @@
       "release-type": "go"
     }
   },
-  "pull-request-title-pattern": "release${scope}: policy-bot ${version}"
+  "pull-request-title-pattern": "release: policy-bot ${version}"
 }
