@@ -1,8 +1,9 @@
+---
 name: upstream-sync
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: 0 6 * * *
   workflow_dispatch: {}
 
 permissions:
@@ -12,6 +13,7 @@ permissions:
 env:
   UPSTREAM_REPO: palantir/policy-bot
   UPSTREAM_BRANCH: develop
+  FORK_BRANCH: main
 
 jobs:
   sync:
@@ -21,6 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.FORK_BRANCH }}
           token: ${{ secrets.FINN_DEVOPS_CONTENT_WRITE_PAT }}
 
       - name: Add upstream remote and fetch
@@ -57,7 +60,7 @@ jobs:
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "short=${short}" >> "$GITHUB_OUTPUT"
 
-          git checkout -B "${branch}"
+          git checkout -B "${branch}" "origin/${FORK_BRANCH}"
           if ! git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"; then
             echo "conflicts=true" >> "$GITHUB_OUTPUT"
             git add -A
@@ -108,5 +111,5 @@ jobs:
           if [ -n "${pr_number}" ]; then
             gh pr edit "${pr_number}" --title "${title}" --body-file "${body_file}"
           else
-            gh pr create --title "${title}" --body-file "${body_file}" --head "${BRANCH}"
+            gh pr create --title "${title}" --body-file "${body_file}" --base "${FORK_BRANCH}" --head "${BRANCH}"
           fi
