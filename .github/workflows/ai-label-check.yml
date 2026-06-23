@@ -1,0 +1,29 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: AI Label Check
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - labeled
+      - unlabeled
+      - reopened
+      - ready_for_review
+
+permissions: {}
+
+jobs:
+  ai-assistance-disclosure:
+    uses: EWA-Services/EWA-Actions/.github/workflows/shareable-ai-label-check.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    with:
+      actions_ref: main
+    secrets:
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
