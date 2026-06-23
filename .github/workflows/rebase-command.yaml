@@ -22,7 +22,7 @@ jobs:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
 
       - name: Checkout PR
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           fetch-depth: 0
@@ -31,14 +31,15 @@ jobs:
 
       - name: Rebase with signed commits
         id: rebase
+        env:
+          BASE_REF: ${{ github.event.client_payload.pull_request.base.ref }}
         run: |
-          BASE_BRANCH="${{ github.event.client_payload.pull_request.base.ref }}"
+          BASE_BRANCH="$BASE_REF"
           git fetch origin "$BASE_BRANCH"
 
-          export GIT_SEQUENCE_EDITOR=':'
-
-          if git rebase -i --committer-date-is-author-date \
-            --exec 'git commit --amend --no-edit --gpg-sign' \
+          if git rebase --committer-date-is-author-date \
+            --empty=drop \
+            --gpg-sign \
             "origin/$BASE_BRANCH"; then
             echo "rebased=true" >> $GITHUB_OUTPUT
             echo "rebased-count=1" >> $GITHUB_OUTPUT
@@ -51,7 +52,7 @@ jobs:
 
       - name: Add reaction
         if: steps.rebase.outputs.rebased == 'true'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9  # v5.0.0
         with:
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
@@ -60,7 +61,7 @@ jobs:
 
       - name: Comment on failure
         if: steps.rebase.outputs.rebased == 'false'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9  # v5.0.0
         with:
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           repository: ${{ github.event.client_payload.github.payload.repository.full_name }}
