@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   pre-commit-check:
-    runs-on: finn-runners
+    runs-on: ubicloud-standard-2
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -45,6 +45,7 @@ jobs:
         id: pre-commit
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+          SKIP: ${{ secrets.GITGUARDIAN_API_KEY == '' && 'ggshield' || '' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |

@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   slashCommandDispatch:
-    runs-on: finn-runners
+    runs-on: ubicloud-standard-2
     steps:
       - name: Slash Command Dispatch
-        uses: peter-evans/slash-command-dispatch@v4
+        uses: peter-evans/slash-command-dispatch@9bdcd7914ec1b75590b790b844aa3b8eee7c683a  # v5.0.2
         with:
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           commands: rebase
