@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   pre-commit-check:
-    runs-on: finn-runners
+    runs-on: ubicloud-standard-2
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
