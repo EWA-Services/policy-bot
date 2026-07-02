@@ -1,51 +1,52 @@
+---
 name: Build
 
 on:
   push:
     tags-ignore:
-      - '**'
+      - "**"
 
-  pull_request:
+  pull_request: {}
 
   release:
     types: [published]
 
 jobs:
   Verify:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
 
     env:
       GOPATH: /home/runner/go
 
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
 
-    - name: Set Go version
-      id: go_version
-      run: |
-        GO_VERSION=$(sed -E -n '/^go / s/^go ([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' < go.mod)
-        echo "version=${GO_VERSION}" >> $GITHUB_OUTPUT
+      - name: Set Go version
+        id: go_version
+        run: |
+          GO_VERSION=$(sed -E -n '/^go / s/^go ([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' < go.mod)
+          echo "version=${GO_VERSION}" >> $GITHUB_OUTPUT
 
-    - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-      with:
-        go-version: ${{ steps.go_version.outputs.version }}
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version: ${{ steps.go_version.outputs.version }}
 
-    - name: Cache Godel assets
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: ~/.godel
-        key: ${{ runner.os }}-godel-${{ hashFiles('godelw', 'godel/config/godel.yml') }}
-        restore-keys: |
-          ${{ runner.os }}-godel-
+      - name: Cache Godel assets
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: ~/.godel
+          key: ${{ runner.os }}-godel-${{ hashFiles('godelw', 'godel/config/godel.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-godel-
 
-    - name: Verify
-      run: ./godelw verify --apply=false
+      - name: Verify
+        run: ./godelw verify --apply=false
 
   Dist:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     permissions:
       contents: write
 
@@ -53,84 +54,96 @@ jobs:
       GOPATH: /home/runner/go
 
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
 
-    - name: Set Go version
-      id: go_version
-      run: |
-        GO_VERSION=$(sed -E -n '/^go / s/^go ([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' < go.mod)
-        echo "version=${GO_VERSION}" >> $GITHUB_OUTPUT
+      - name: Set Go version
+        id: go_version
+        run: |
+          GO_VERSION=$(sed -E -n '/^go / s/^go ([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' < go.mod)
+          echo "version=${GO_VERSION}" >> $GITHUB_OUTPUT
 
-    - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-      with:
-        go-version: ${{ steps.go_version.outputs.version }}
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version: ${{ steps.go_version.outputs.version }}
 
-    - name: Cache Godel assets
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: ~/.godel
-        key: ${{ runner.os }}-godel-${{ hashFiles('godelw', 'godel/config/godel.yml') }}
-        restore-keys: |
-          ${{ runner.os }}-godel-
+      - name: Cache Godel assets
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: ~/.godel
+          key: ${{ runner.os }}-godel-${{ hashFiles('godelw', 'godel/config/godel.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-godel-
 
-    - name: Set up Node
-      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-      with:
-        node-version: 20
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 20
 
-    - name: Cache node_modules
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-      with:
-        path: node_modules
-        key: ${{ runner.os }}-node-modules-${{ hashFiles('yarn.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-node-modules-
+      - name: Cache node_modules
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
 
-    - name: Install frontend dependencies
-      run: yarn install
+      - name: Install frontend dependencies
+        run: yarn install
 
-    - name: Build frontend
-      run: yarn run build:production
+      - name: Build frontend
+        run: yarn run build:production
 
-    - name: Build distribution
-      run: ./godelw dist
+      - name: Build distribution
+        run: ./godelw dist
 
-    - name: Build Docker image
-      run: ./godelw docker build --verbose
+      - name: Build Docker image
+        run: ./godelw docker build --verbose
 
-    - name: Archive distribution
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-      with:
-        name: dist
-        path: |
-          build/policy-bot/*/bin/*.tgz
+      - name: Archive distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dist
+          path: |
+            build/policy-bot/*/bin/*.tgz
 
-    #
-    # Steps after this point should only run when publishing
-    # Include them here to avoid exporting the Docker container as an artifact
-    #
+      #
+      # Steps after this point should only run when publishing
+      # Include them here to avoid exporting the Docker container as an artifact
+      #
 
-    - name: Publish release assets
-      if: ${{ github.event_name == 'release' }}
-      run: |
-        repo_name="${GITHUB_REPOSITORY#*/}"
-        ./godelw publish github --add-v-prefix --api-url="${GITHUB_API_URL}" --user="${GITHUB_REPOSITORY_OWNER}" --repository="${repo_name}" --token="${{ secrets.GITHUB_TOKEN }}"
+      - name: Publish release assets
+        if: ${{ github.event_name == 'release' }}
+        run: |
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          ./godelw publish github \
+            --add-v-prefix \
+            --api-url="${GITHUB_API_URL}" \
+            --user="${GITHUB_REPOSITORY_OWNER}" \
+            --repository="${repo_name}" \
+            --token="${{ secrets.GITHUB_TOKEN }}"
 
   ci-all:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     if: ${{ !cancelled() }}
     needs:
       - Verify
       - Dist
     steps:
-    - name: Check required job results
-      run: |
-        if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" == "true" ]]; then
-          echo "One or more required jobs did not succeed"
-          echo '${{ toJSON(needs) }}'
-          exit 1
-        fi
-        echo "All required jobs succeeded"
+      - name: Check required job results
+        env:
+          REQUIRED_RESULTS_FAILED: >-
+            ${{
+              contains(needs.*.result, 'failure') ||
+              contains(needs.*.result, 'cancelled') ||
+              contains(needs.*.result, 'skipped')
+            }}
+        run: |
+          if [[ "${REQUIRED_RESULTS_FAILED}" == "true" ]]; then
+            echo "One or more required jobs did not succeed"
+            echo '${{ toJSON(needs) }}'
+            exit 1
+          fi
+          echo "All required jobs succeeded"
