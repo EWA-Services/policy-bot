@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   rebase:
+    if: ${{ !startsWith(github.event.client_payload.pull_request.head.ref, 'sync_workflow_files') }}
     runs-on: ubicloud-standard-2
     steps:
       - name: Setup GPG for signed commits
