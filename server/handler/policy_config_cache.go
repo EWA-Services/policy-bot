@@ -82,12 +82,6 @@ func (c *PolicyConfigCache) load(
 		}
 		c.removeElement(element)
 	}
-	for _, element := range c.entries {
-		entry := element.Value.(*policyConfigCacheEntry)
-		if !now.Before(entry.expiresAt) {
-			c.removeElement(element)
-		}
-	}
 
 	if current, ok := c.inFlight[key]; ok {
 		c.mu.Unlock()
