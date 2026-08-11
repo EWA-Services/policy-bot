@@ -14,80 +14,9 @@ on:
 permissions: {}
 
 jobs:
-  pr_description:
-    continue-on-error: true
-    name: Validate Required PR Description
-    runs-on: ubicloud-standard-2
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    steps:
-      - name: Skip PR description validation for Dependabot PR
-        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
-        run: echo "✅ Dependabot PR detected - PR description validation skipped for dependency automation."
-
-      - name: Checkout EWA-Actions semantic PR action
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
-        with:
-          repository: EWA-Services/EWA-Actions
-          ref: main
-          path: ewa-actions
-          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
-          persist-credentials: false
-
-      - uses: ./ewa-actions/.github/actions/semantic-pr
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
-        with:
-          github-token: ${{ github.token }}
-
-  semantic-pr:
-    continue-on-error: true
-    name: Validate PR Title
-    needs: [pr_description]
-    runs-on: ubicloud-standard-2
-    permissions:
-      pull-requests: read
-    steps:
-      - name: Skip semantic title validation for Dependabot PR
-        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
-        run: echo "✅ Dependabot PR detected - semantic title validation skipped for dependency automation."
-
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50  # v6.1.1
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
-        # yamllint disable rule:line-length
-        with:
-          # Default types can be found here:
-          # https://github.com/commitizen/conventional-commit-types/blob/master/index.json
-          # Notes: chore - Cannot be removed currently, as some workflows still rely on this type to perform releases.
-          types: |
-            build
-            chore
-            ci
-            docs
-            feat
-            fix
-            perf
-            refactor
-            release
-            revert
-            style
-            test
-          # Reject subjects that start with a second conventional-commit header,
-          # e.g. "feat: test: ..." or "fix: feat(scope): ...".
-          subjectPattern: "^(?!(?:build|chore|ci|docs|feat|fix|perf|refactor|release|revert|style|test)(?:\\([^)]*\\))?(?:!)?: ).+"
-          subjectPatternError: |
-            The subject "{subject}" in PR title "{title}" starts with another conventional commit prefix.
-            Use a single conventional commit prefix, for example "feat: Add login validation [ENG-123]".
-          # yamllint enable rule:line-length
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
   validate-pr-title-and-description:
     continue-on-error: true
     name: Validate PR Title and Description
-    needs: [pr_description]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read

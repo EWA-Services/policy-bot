@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   slashCommandDispatch:
-    runs-on: ubicloud-standard-2
+    runs-on: finn-runners
     steps:
       - name: Slash Command Dispatch
         uses: peter-evans/slash-command-dispatch@9bdcd7914ec1b75590b790b844aa3b8eee7c683a  # v5.0.2
