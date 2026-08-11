@@ -56,14 +56,14 @@ func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *
 		BaseBranch: branch,
 	}
 
-	load := func() (appconfig.Config, error) {
-		return cf.loadConfigWithRetries(ctx, client, owner, repository, branch)
+	load := func(loadCtx context.Context) (appconfig.Config, error) {
+		return cf.loadConfigWithRetries(loadCtx, client, owner, repository, branch)
 	}
 
 	var c appconfig.Config
 	var err error
 	if cf.PolicyConfigCache == nil {
-		c, err = load()
+		c, err = load(ctx)
 	} else {
 		c, err = cf.PolicyConfigCache.load(ctx, key, load)
 	}

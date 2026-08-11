@@ -48,9 +48,10 @@ const (
 	DefaultWebhookWorkers   = 10
 	DefaultWebhookQueueSize = 100
 
-	DefaultHTTPCacheSize     = 50 * datasize.MB
-	DefaultPushedAtCacheSize = 100_000
-	DefaultPolicyConfigTTL   = 5 * time.Minute
+	DefaultHTTPCacheSize         = 50 * datasize.MB
+	DefaultPushedAtCacheSize     = 100_000
+	DefaultPolicyConfigTTL       = 5 * time.Minute
+	DefaultPolicyConfigCacheSize = 50 * datasize.MB
 )
 
 type Server struct {
@@ -154,7 +155,11 @@ func New(c *Config) (*Server, error) {
 	if policyConfigTTL == 0 {
 		policyConfigTTL = DefaultPolicyConfigTTL
 	}
-	policyConfigCache := handler.NewPolicyConfigCache(policyConfigTTL)
+	policyConfigMaxSize := int64(DefaultPolicyConfigCacheSize)
+	if c.Cache.PolicyConfigMaxSize != 0 {
+		policyConfigMaxSize = int64(c.Cache.PolicyConfigMaxSize)
+	}
+	policyConfigCache := handler.NewPolicyConfigCache(policyConfigTTL, policyConfigMaxSize)
 
 	policyPaths := []string{c.Options.PolicyPath}
 	if c.Options.ForceSharedPolicy {

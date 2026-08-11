@@ -18,13 +18,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseConfigPolicyConfigTTL(t *testing.T) {
-	config, err := ParseConfig([]byte("cache:\n  policy_config_ttl: 1m\n"))
+func TestParseConfigPolicyConfigCache(t *testing.T) {
+	config, err := ParseConfig([]byte("cache:\n  policy_config_ttl: 1m\n  policy_config_max_size: 10MB\n"))
 
 	require.NoError(t, err)
 	assert.Equal(t, time.Minute, config.Cache.PolicyConfigTTL)
+	assert.Equal(t, 10*datasize.MB, config.Cache.PolicyConfigMaxSize)
 }
