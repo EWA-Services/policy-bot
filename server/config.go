@@ -71,6 +71,10 @@ type CachingConfig struct {
 	// The size of the global cache for commit push times. Each entry uses
 	// roughly 100 bytes of memory.
 	PushedAtSize int `yaml:"pushed_at_size"`
+
+	// How long to reuse a successfully loaded repository policy before
+	// checking GitHub for a newer version.
+	PolicyConfigTTL time.Duration `yaml:"policy_config_ttl"`
 }
 
 type WorkerConfig struct {

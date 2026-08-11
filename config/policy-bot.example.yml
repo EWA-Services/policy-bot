@@ -51,6 +51,7 @@ logging:
 #
 # cache:
 #   max_size: "50MB"
+#   policy_config_ttl: 5m
 
 # Options for webhook processing workers. Events are dropped if the queue is
 # full. The defaults are shown below.

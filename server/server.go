@@ -50,6 +50,7 @@ const (
 
 	DefaultHTTPCacheSize     = 50 * datasize.MB
 	DefaultPushedAtCacheSize = 100_000
+	DefaultPolicyConfigTTL   = 5 * time.Minute
 )
 
 type Server struct {
@@ -149,6 +150,11 @@ func New(c *Config) (*Server, error) {
 	}
 
 	seenPolicyCache := handler.NewSeenPolicyCache()
+	policyConfigTTL := c.Cache.PolicyConfigTTL
+	if policyConfigTTL == 0 {
+		policyConfigTTL = DefaultPolicyConfigTTL
+	}
+	policyConfigCache := handler.NewPolicyConfigCache(policyConfigTTL)
 
 	policyPaths := []string{c.Options.PolicyPath}
 	if c.Options.ForceSharedPolicy {
@@ -172,7 +178,8 @@ func New(c *Config) (*Server, error) {
 				policyPaths,
 				appconfig.WithOwnerDefault(*c.Options.SharedRepository, sharedPolicyPaths),
 			),
-			SeenPolicyCache: seenPolicyCache,
+			SeenPolicyCache:   seenPolicyCache,
+			PolicyConfigCache: policyConfigCache,
 		},
 
 		AppName: app.GetSlug(),
