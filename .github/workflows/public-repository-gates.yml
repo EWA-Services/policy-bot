@@ -1,0 +1,140 @@
+# Public repositories cannot call reusable workflows from the private
+# EWA-Services/EWA-Actions repository. Keep the required PR checks available
+# here without granting a public workflow access to private actions or secrets.
+---
+name: Public Repository Required Checks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - labeled
+      - unlabeled
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  semantic-pr:
+    name: Validate PR Title and Description
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Validate pull request title
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50  # v6.1.1
+        with:
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            release
+            revert
+            style
+            test
+          # yamllint disable-line rule:line-length
+          subjectPattern: "^(?!(?:build|chore|ci|docs|feat|fix|perf|refactor|release|revert|style|test)(?:\\([^)]*\\))?(?:!)?: ).+"
+          subjectPatternError: >-
+            The subject "{subject}" in PR title "{title}" starts with another
+            conventional commit prefix.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Check out pull request metadata validator
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/semantic_pr_body_layout.py
+          sparse-checkout-cone-mode: false
+
+      - name: Validate pull request description
+        shell: bash
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "$PR_AUTHOR" == "dependabot[bot]" ]]; then
+            exit 0
+          fi
+
+          checked_count=$(grep -ic '\[x\] I have' <<< "$PR_BODY" || true)
+          if [[ "$PR_AUTHOR" == "finn-devops" ]]; then
+            [[ "$checked_count" -ge 1 ]]
+            exit 0
+          fi
+
+          layout_json=$(PR_BODY="$PR_BODY" python3 .github/scripts/semantic_pr_body_layout.py)
+          first_content_line=$(jq -r '.first_content_line' <<< "$layout_json")
+          top_level_headings=$(jq -r '.top_level_headings' <<< "$layout_json")
+          expected_headings=$'## Checklist\n## Description\n## AI Assistance'
+          linear_ref=$(printf '%s\n%s\n%s\n' "$PR_HEAD_BRANCH" "$PR_TITLE" "$PR_BODY" | \
+            grep -Eo '[A-Z][A-Z0-9]+-[0-9]+' | head -1 || true)
+
+          [[ "$first_content_line" == "## Checklist" ]]
+          [[ "$top_level_headings" == "$expected_headings" ]]
+          [[ "$checked_count" -ge 2 ]]
+          [[ -n "$linear_ref" ]]
+
+  ai-assistance-disclosure:
+    name: ai-assistance-disclosure / AI Label Check
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Validate AI usage details
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+            const author = pullRequest?.user?.login;
+            const title = pullRequest?.title || '';
+            const automationPullRequest = author === 'finn-devops' || (
+              author === 'github-actions[bot]' && /^(ci:\s*sync\b|chore:\s*sync\b|sync\b)/i.test(title)
+            );
+            if (!pullRequest || pullRequest.draft || author === 'dependabot[bot]' || automationPullRequest) {
+              return;
+            }
+
+            const labels = new Set(pullRequest.labels.map((label) => label.name));
+            const hasAiAssisted = labels.has('ai-assisted');
+            const hasNotAiAssisted = labels.has('not-ai-assisted');
+            if (hasAiAssisted === hasNotAiAssisted) {
+              core.setFailed('Apply exactly one AI assistance label.');
+              return;
+            }
+
+            const header = hasAiAssisted ? '### Workflow trace' : '### Why not AI-assisted';
+            const body = (pullRequest.body || '').replace(/<!--[\s\S]*?-->/g, '');
+            const lines = body.replace(/\r\n/g, '\n').split('\n');
+            const start = lines.findIndex((line) => line === header);
+            const sectionLines = [];
+            if (start >= 0) {
+              for (const line of lines.slice(start + 1)) {
+                if (/^#{1,6} /.test(line)) break;
+                sectionLines.push(line);
+              }
+            }
+            const content = sectionLines.join('\n');
+            if (content.replace(/\s/g, '').length < 50) {
+              core.setFailed(`${header} must contain at least 50 non-whitespace characters.`);
+              return;
+            }
+
+            if (hasAiAssisted) {
+              const contentLines = content.split('\n').filter((line) => line.trim());
+              const isBulletList = contentLines.length > 0 && contentLines.every(
+                (line) => /^\s*[-*+] \S/.test(line),
+              );
+              if (!isBulletList) {
+                core.setFailed(`${header} must be a Markdown bullet list.`);
+              }
+            }
