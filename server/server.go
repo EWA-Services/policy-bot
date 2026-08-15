@@ -48,8 +48,10 @@ const (
 	DefaultWebhookWorkers   = 10
 	DefaultWebhookQueueSize = 100
 
-	DefaultHTTPCacheSize     = 50 * datasize.MB
-	DefaultPushedAtCacheSize = 100_000
+	DefaultHTTPCacheSize         = 50 * datasize.MB
+	DefaultPushedAtCacheSize     = 100_000
+	DefaultPolicyConfigTTL       = 5 * time.Minute
+	DefaultPolicyConfigCacheSize = 50 * datasize.MB
 )
 
 type Server struct {
@@ -149,6 +151,15 @@ func New(c *Config) (*Server, error) {
 	}
 
 	seenPolicyCache := handler.NewSeenPolicyCache()
+	policyConfigTTL := c.Cache.PolicyConfigTTL
+	if policyConfigTTL == 0 {
+		policyConfigTTL = DefaultPolicyConfigTTL
+	}
+	policyConfigMaxSize := int64(DefaultPolicyConfigCacheSize)
+	if c.Cache.PolicyConfigMaxSize != 0 {
+		policyConfigMaxSize = int64(c.Cache.PolicyConfigMaxSize)
+	}
+	policyConfigCache := handler.NewPolicyConfigCache(policyConfigTTL, policyConfigMaxSize)
 
 	policyPaths := []string{c.Options.PolicyPath}
 	if c.Options.ForceSharedPolicy {
@@ -172,7 +183,8 @@ func New(c *Config) (*Server, error) {
 				policyPaths,
 				appconfig.WithOwnerDefault(*c.Options.SharedRepository, sharedPolicyPaths),
 			),
-			SeenPolicyCache: seenPolicyCache,
+			SeenPolicyCache:   seenPolicyCache,
+			PolicyConfigCache: policyConfigCache,
 		},
 
 		AppName: app.GetSlug(),

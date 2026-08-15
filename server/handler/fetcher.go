@@ -44,8 +44,9 @@ type FetchedConfig struct {
 }
 
 type ConfigFetcher struct {
-	Loader          ConfigLoader
-	SeenPolicyCache *SeenPolicyCache
+	Loader            ConfigLoader
+	SeenPolicyCache   *SeenPolicyCache
+	PolicyConfigCache *PolicyConfigCache
 }
 
 func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *github.Client, owner, repository, branch string) FetchedConfig {
@@ -55,53 +56,68 @@ func (cf *ConfigFetcher) ConfigForRepositoryBranch(ctx context.Context, client *
 		BaseBranch: branch,
 	}
 
+	load := func(loadCtx context.Context) (appconfig.Config, error) {
+		return cf.loadConfigWithRetries(loadCtx, client, owner, repository, branch)
+	}
+
+	var c appconfig.Config
+	var err error
+	if cf.PolicyConfigCache == nil {
+		c, err = load(ctx)
+	} else {
+		c, err = cf.PolicyConfigCache.load(ctx, key, load)
+	}
+
+	fc := FetchedConfig{
+		Source: c.Source,
+		Path:   c.Path,
+	}
+	if err != nil {
+		fc.SeenPolicy = cf.SeenPolicyCache.Get(key)
+		fc.LoadError = err
+		return fc
+	}
+	if c.IsUndefined() {
+		return fc
+	}
+
+	cf.SeenPolicyCache.Set(key)
+	// Mark the branch as having seen a policy even if parsing fails below.
+	fc.SeenPolicy = true
+
+	var pc policy.Config
+	if err := yaml.UnmarshalStrict(c.Content, &pc); err != nil {
+		fc.ParseError = err
+	} else {
+		fc.Config = &pc
+	}
+	return fc
+}
+
+func (cf *ConfigFetcher) loadConfigWithRetries(
+	ctx context.Context,
+	client *github.Client,
+	owner, repository, branch string,
+) (appconfig.Config, error) {
 	retries := 0
 	delay := 1 * time.Second
 	for {
-		c, err := cf.Loader.LoadConfig(ctx, client, owner, repository, branch)
-		fc := FetchedConfig{
-			Source: c.Source,
-			Path:   c.Path,
+		config, err := cf.Loader.LoadConfig(ctx, client, owner, repository, branch)
+		if err == nil || (!os.IsTimeout(err) && !isServerError(err)) {
+			return config, err
 		}
 
-		if err != nil {
-			fc.SeenPolicy = cf.SeenPolicyCache.Get(key)
-			if !os.IsTimeout(err) && !isServerError(err) {
-				fc.LoadError = err
-				return fc
-			}
-
-			retries++
-			if retries > 3 {
-				fc.LoadError = err
-				return fc
-			}
-
-			select {
-			case <-ctx.Done():
-				fc.LoadError = ctx.Err()
-				return fc
-			case <-time.After(delay):
-				delay *= 2
-				continue
-			}
+		retries++
+		if retries > 3 {
+			return config, err
 		}
 
-		if c.IsUndefined() {
-			return fc
+		select {
+		case <-ctx.Done():
+			return config, ctx.Err()
+		case <-time.After(delay):
+			delay *= 2
 		}
-
-		cf.SeenPolicyCache.Set(key)
-		// Mark the branch as having seen a policy even if parsing fails below.
-		fc.SeenPolicy = true
-
-		var pc policy.Config
-		if err := yaml.UnmarshalStrict(c.Content, &pc); err != nil {
-			fc.ParseError = err
-		} else {
-			fc.Config = &pc
-		}
-		return fc
 	}
 }
 
