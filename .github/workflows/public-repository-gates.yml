@@ -60,8 +60,10 @@ jobs:
         shell: bash
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           if [[ "$PR_AUTHOR" == "dependabot[bot]" ]]; then
@@ -70,6 +72,14 @@ jobs:
 
           checked_count=$(grep -ic '\[x\] I have' <<< "$PR_BODY" || true)
           if [[ "$PR_AUTHOR" == "finn-devops" ]]; then
+            lowercase_body=$(printf '%s' "$PR_BODY" | tr '[:upper:]' '[:lower:]')
+            if [[ "$PR_HEAD_REPO" == "$PR_BASE_REPO" ]] && \
+              [[ "$PR_HEAD_BRANCH" == release-please--branches--* ]] && \
+              [[ "$PR_TITLE" =~ ^release(\(.*\))?:.*|^chore\(.*\):.*release.* ]] && \
+              [[ "$lowercase_body" == *":robot: i have created a release"* ]]; then
+              exit 0
+            fi
+
             [[ "$checked_count" -ge 1 ]]
             exit 0
           fi
