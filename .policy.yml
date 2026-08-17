@@ -33,6 +33,7 @@ approval_rules:
           statuses:
             - Validate PR Title and Description
             - ai-assistance-disclosure / AI Label Check
+            - pre-commit-check
   - name: dev-infrastructure team approval
     description: Requires 2 approvals from team for all PRs to main or prod
     if:
@@ -65,3 +66,4 @@ approval_rules:
           statuses:
             - Validate PR Title and Description
             - ai-assistance-disclosure / AI Label Check
+            - pre-commit-check
