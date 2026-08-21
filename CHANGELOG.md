@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.41.3-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.2-finn.1...v1.41.3-finn.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* allow release automation through public gate [ENG-1715] ([#21](https://github.com/EWA-Services/policy-bot/issues/21)) ([2028c19](https://github.com/EWA-Services/policy-bot/commit/2028c19796e5ef20b3a7f0927f7a37eb619958e1))
+* cache repository policy loads [ENG-1715] ([#17](https://github.com/EWA-Services/policy-bot/issues/17)) ([0bccfd3](https://github.com/EWA-Services/policy-bot/commit/0bccfd3f3f75080e3b5c7066366114a1ecef69bf))
+
 ## [1.41.2-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.1-finn.1...v1.41.2-finn.1) (2026-05-29)
 
 
