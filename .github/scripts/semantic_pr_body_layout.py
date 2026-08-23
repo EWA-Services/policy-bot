@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
 import json
 import os
 import re
