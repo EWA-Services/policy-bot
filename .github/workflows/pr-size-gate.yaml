@@ -1,0 +1,141 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: PR Size
+run-name: "PR Size / PR #${{ github.event.pull_request.number || github.event.issue.number }}"
+
+on:
+  pull_request:
+    types: [edited, opened, reopened, synchronize]
+  issue_comment:
+    types: [created, edited, deleted]
+
+jobs:
+  rerun-on-override-comment:
+    name: Rerun PR size check for override change
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      github.event.comment.user.login == 'jai' &&
+      (startsWith(github.event.comment.body, 'size override:') ||
+      startsWith(github.event.changes.body.from, 'size override:'))
+    permissions:
+      actions: write
+      pull-requests: read
+    concurrency:
+      group: pr-size-rerun-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rerun pull-request workflow
+        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-rerun@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          current-run-id: ${{ github.run_id }}
+          pull-request-number: ${{ github.event.issue.number }}
+
+  reviewable-size:
+    name: Reviewable PR Size
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: pr-size-evaluate-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - id: pull-request
+        name: Resolve pull request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const pullNumber = context.payload.pull_request.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber
+            });
+            if (pullRequest.head.sha !== context.payload.pull_request.head.sha) {
+              core.setFailed('The pull request head changed; refusing a stale workflow rerun.');
+              return;
+            }
+
+            core.setOutput('number', pullRequest.number);
+            core.setOutput('base-sha', pullRequest.base.sha);
+            core.setOutput('head-sha', pullRequest.head.sha);
+
+      - name: Check out pull request
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.pull-request.outputs.head-sha }}
+
+      - id: policy
+        name: Load trusted review policy
+        env:
+          BASE_SHA: ${{ steps.pull-request.outputs.base-sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          policy_path="$RUNNER_TEMP/pr-size-ignore"
+          git show "${BASE_SHA}:.pr-size-ignore" > "$policy_path"
+          printf 'path=%s\n' "$policy_path" >> "$GITHUB_OUTPUT"
+
+      - id: measure
+        name: Measure reviewable diff
+        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-gate@main
+        with:
+          base-sha: ${{ steps.pull-request.outputs.base-sha }}
+          head-sha: ${{ steps.pull-request.outputs.head-sha }}
+          ignore-file: ${{ steps.policy.outputs.path }}
+
+      - id: override
+        name: Find size override
+        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-override@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ steps.pull-request.outputs.number }}
+
+      - id: evaluate
+        name: Evaluate thresholds
+        if: always()
+        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-evaluate@main
+        with:
+          mode: ${{ vars.PR_SIZE_MODE || 'enforce' }}
+          raw-loc: ${{ steps.measure.outputs.raw-loc }}
+          reviewable-loc: ${{ steps.measure.outputs.reviewable-loc }}
+          reviewable-files: ${{ steps.measure.outputs.reviewable-files }}
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ steps.pull-request.outputs.number }}
+          head-sha: ${{ steps.pull-request.outputs.head-sha }}
+          override-actor: ${{ steps.override.outputs.actor }}
+          override-tier: ${{ steps.override.outputs.tier }}
+          override-comment-url: ${{ steps.override.outputs.comment-url }}
+
+      - name: Update PR size comment
+        if: always() && steps.evaluate.outputs.configuration-error != 'true'
+        continue-on-error: true
+        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-comment@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          pull-request-number: ${{ steps.pull-request.outputs.number }}
+          mode: ${{ vars.PR_SIZE_MODE || 'enforce' }}
+          reviewable-loc: ${{ steps.measure.outputs.reviewable-loc }}
+          reviewable-files: ${{ steps.measure.outputs.reviewable-files }}
+          warned: ${{ steps.evaluate.outputs.warned }}
+          blocked: ${{ steps.evaluate.outputs.blocked }}
+          override-actor: ${{ steps.override.outputs.actor }}
+
+      - name: Enforce configuration and size limits
+        if: >-
+          always() &&
+          (steps.evaluate.outputs.configuration-error == 'true' ||
+          steps.evaluate.outputs.blocked == 'true')
+        shell: bash
+        run: exit 1
