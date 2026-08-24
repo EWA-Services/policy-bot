@@ -10,6 +10,8 @@ on:
   issue_comment:
     types: [created, edited, deleted]
 
+permissions: {}
+
 jobs:
   rerun-on-override-comment:
     name: Rerun PR size check for override change
