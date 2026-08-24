@@ -1,0 +1,54 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+
+# Paths excluded from reviewable-LOC counting.
+# This is real gitignore syntax. Negate a pattern with a leading "!".
+
+# Dependency locks and installed dependencies.
+composer.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+poetry.lock
+Pipfile.lock
+uv.lock
+.terraform.lock.hcl
+**/vendor/**
+**/node_modules/**
+**/.venv/**
+**/site-packages/**
+**/.terraform/**
+
+# Build output and generated sources.
+**/dist/**
+**/build/**
+**/.next/**
+**/out/**
+**/bootstrap/cache/**
+**/__pycache__/**
+*.min.js
+*.min.css
+*.map
+**/__generated__/**
+**/generated/**
+*.generated.*
+*_pb2.py
+*_pb2.pyi
+*.pb.ts
+_ide_helper.php
+_ide_helper_models.php
+.phpstorm.meta.php
+
+# Test snapshots, state, locale files, and generated documentation.
+**/__snapshots__/**
+*.snap
+**/cassettes/**
+*.tfstate
+*.tfstate.backup
+*.tfplan
+*.po
+*.pot
+*.svg
+CHANGELOG.md
+
+# Terraform modules are intentionally not excluded: review their source changes.
