@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.42.0-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.3-finn.1...v1.42.0-finn.1) (2026-08-24)
+
+
+### Features
+
+* add reviewable PR size gate template [ENG-1816] ([#751](https://github.com/EWA-Services/policy-bot/issues/751)) ([#23](https://github.com/EWA-Services/policy-bot/issues/23)) ([7b91539](https://github.com/EWA-Services/policy-bot/commit/7b91539629ba887cc4e2901db77abf04ae65efcf))
+
 ## [1.41.3-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.2-finn.1...v1.41.3-finn.1) (2026-08-21)
 
 
