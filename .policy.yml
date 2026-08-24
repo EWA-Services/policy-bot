@@ -67,3 +67,4 @@ approval_rules:
             - Validate PR Title and Description
             - ai-assistance-disclosure / AI Label Check
             - pre-commit-check
+            - Reviewable PR Size
