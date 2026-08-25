@@ -102,7 +102,7 @@ jobs:
       github.event.client_payload.github.payload.issue.state == 'open'
     uses: EWA-Services/EWA-Actions/.github/workflows/shareable-code-review.yaml@main
     permissions:
-      actions: read
+      actions: write
       checks: read
       contents: read
       issues: write
