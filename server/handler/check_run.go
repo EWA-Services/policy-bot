@@ -29,6 +29,8 @@ type CheckRun struct {
 	Base
 }
 
+type checkRunEvaluator func(context.Context, int64, common.Trigger, pull.Locator) error
+
 func (h *CheckRun) Handles() []string { return []string{"check_run"} }
 
 func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, payload []byte) error {
@@ -36,8 +38,11 @@ func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, pay
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return errors.Wrap(err, "failed to parse check_run event payload")
 	}
+	return h.processEvent(ctx, event, h.Evaluate)
+}
 
-	if event.GetAction() != "completed" || event.GetCheckRun().GetConclusion() != "success" {
+func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent, evaluate checkRunEvaluator) error {
+	if event.GetAction() != "completed" {
 		return nil
 	}
 
@@ -88,7 +93,7 @@ func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, pay
 			continue
 		}
 
-		if err := h.Evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
+		if err := evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
 			Owner:  ownerName,
 			Repo:   repoName,
 			Number: pr.GetNumber(),
