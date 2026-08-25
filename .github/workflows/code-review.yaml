@@ -6,6 +6,8 @@
 name: Code Review
 
 on:
+  repository_dispatch:
+    types: [review-command]
   issue_comment:
     types:
       - created
@@ -95,6 +97,9 @@ permissions: {}
 
 jobs:
   code-review:
+    if: >-
+      github.event_name != 'repository_dispatch' ||
+      github.event.client_payload.github.payload.issue.state == 'open'
     uses: EWA-Services/EWA-Actions/.github/workflows/shareable-code-review.yaml@main
     permissions:
       actions: read
@@ -105,11 +110,21 @@ jobs:
     with:
       actions_ref: main
       provider: ${{ inputs.provider || 'codex' }}
-      pr_number: ${{ inputs.pr_number || '' }}
-      trigger_type: ${{ inputs.trigger_type || 'pr_event' }}
-      comment_body: ${{ inputs.comment_body || '' }}
-      comment_author: ${{ inputs.comment_author || 'manual-dispatch' }}
-      comment_id: ${{ inputs.comment_id || '' }}
+      pr_number: >-
+        ${{ github.event.client_payload.github.payload.issue.number ||
+            inputs.pr_number || '' }}
+      trigger_type: >-
+        ${{ github.event_name == 'repository_dispatch' && 'pr_event' ||
+            inputs.trigger_type || 'pr_event' }}
+      comment_body: >-
+        ${{ github.event.client_payload.github.payload.comment.body ||
+            inputs.comment_body || '' }}
+      comment_author: >-
+        ${{ github.event.client_payload.github.payload.comment.user.login ||
+            inputs.comment_author || 'manual-dispatch' }}
+      comment_id: >-
+        ${{ github.event.client_payload.github.payload.comment.id ||
+            inputs.comment_id || '' }}
       parent_comment_id: ${{ inputs.parent_comment_id || '' }}
       file_path: ${{ inputs.file_path || '' }}
       line_number: ${{ inputs.line_number || '' }}
