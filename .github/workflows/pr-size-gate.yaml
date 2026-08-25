@@ -2,13 +2,15 @@
 # Do not modify this file directly, all changes will be lost/overwritten
 ---
 name: PR Size
-run-name: "PR Size / PR #${{ github.event.pull_request.number || github.event.issue.number }}"
+run-name: >-
+  PR Size / PR #${{ github.event.pull_request.number ||
+  github.event.client_payload.github.payload.issue.number }}
 
 on:
   pull_request:
     types: [edited, opened, reopened, synchronize]
-  issue_comment:
-    types: [created, edited, deleted]
+  repository_dispatch:
+    types: [pr-size-override-command]
 
 permissions: {}
 
@@ -16,17 +18,18 @@ jobs:
   rerun-on-override-comment:
     name: Rerun PR size check for override change
     if: >-
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request != null &&
-      github.event.comment.user.login == 'jai' &&
-      (startsWith(github.event.comment.body, 'size override:') ||
-      startsWith(github.event.changes.body.from, 'size override:'))
+      github.event_name == 'repository_dispatch' &&
+      github.actor == 'finn-devops' &&
+      github.event.client_payload.github.payload.issue.pull_request != null &&
+      github.event.client_payload.github.payload.issue.state == 'open'
     permissions:
       actions: write
       contents: read
       pull-requests: read
     concurrency:
-      group: pr-size-rerun-${{ github.repository }}-${{ github.event.issue.number }}
+      group: >-
+        pr-size-rerun-${{ github.repository }}-${{
+        github.event.client_payload.github.payload.issue.number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
@@ -36,7 +39,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           current-run-id: ${{ github.run_id }}
-          pull-request-number: ${{ github.event.issue.number }}
+          pull-request-number: ${{ github.event.client_payload.github.payload.issue.number }}
 
   reviewable-size:
     name: Reviewable PR Size
@@ -103,6 +106,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           pull-request-number: ${{ steps.pull-request.outputs.number }}
+          approved-users: ${{ vars.PR_SIZE_OVERRIDE_APPROVERS || 'bhargavms jai maetolay poom' }}
+          reviewable-loc: ${{ steps.measure.outputs.reviewable-loc }}
+          reviewable-files: ${{ steps.measure.outputs.reviewable-files }}
 
       - id: evaluate
         name: Evaluate thresholds

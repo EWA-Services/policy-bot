@@ -4,7 +4,7 @@
 name: Slash Command Dispatch
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited, deleted]
 
 permissions:
   issues: read          # To read issue comments
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   slashCommandDispatch:
+    if: github.event.action == 'created'
     runs-on: finn-runners
     steps:
       - name: Slash Command Dispatch
@@ -19,7 +20,30 @@ jobs:
         with:
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           commands: |
+            ai-review-breaker-reset
+            ai-review-override
+            growthbook-override
+            no-experiment
+            pr-size-override
             rebase
             review
           permission: write
           issue-type: pull-request
+
+  overrideLifecycleDispatch:
+    if: github.event.action != 'created'
+    runs-on: finn-runners
+    steps:
+      - name: Checkout EWA-Actions command router
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: EWA-Services/EWA-Actions
+          ref: main
+          path: ewa-actions
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          persist-credentials: false
+
+      - name: Dispatch override lifecycle event
+        env:
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+        run: python3 ewa-actions/scripts/override_command_dispatch.py

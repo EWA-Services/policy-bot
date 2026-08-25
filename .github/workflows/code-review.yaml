@@ -7,13 +7,10 @@ name: Code Review
 
 on:
   repository_dispatch:
-    types: [review-command]
-  issue_comment:
     types:
-      - created
-  pull_request_review_comment:
-    types:
-      - created
+      - ai-review-breaker-reset-command
+      - ai-review-override-command
+      - review-command
   pull_request:
     types:
       - opened
@@ -22,55 +19,9 @@ on:
   # checkov:skip=CKV_GHA_7: "Manual workflow_dispatch inputs are required for operator validation and debugging."
   workflow_dispatch:
     inputs:
-      provider:
-        description: Which direct CLI reviewer to run
-        required: true
-        default: codex
-        type: choice
-        options:
-          - codex
       pr_number:
-        description: Pull request number to review or respond on
+        description: Pull request number to review
         required: true
-        type: string
-      trigger_type:
-        description: Review trigger type to simulate
-        required: true
-        default: pr_event
-        type: choice
-        options:
-          - pr_event
-          - pr_comment
-          - inline_comment
-      comment_body:
-        description: Comment body to simulate for comment-driven runs
-        required: false
-        default: ""
-        type: string
-      comment_author:
-        description: Comment author to simulate for workflow_dispatch
-        required: false
-        default: manual-dispatch
-        type: string
-      comment_id:
-        description: Existing PR or inline review comment ID for comment-driven runs
-        required: false
-        default: ""
-        type: string
-      parent_comment_id:
-        description: Parent comment ID when simulating a threaded comment reply
-        required: false
-        default: ""
-        type: string
-      file_path:
-        description: File path for inline comment context
-        required: false
-        default: ""
-        type: string
-      line_number:
-        description: Line number for inline comment context
-        required: false
-        default: ""
         type: string
       codex_version:
         description: Codex CLI version to install for direct CLI runs (latest or exact semver)
@@ -87,11 +38,6 @@ on:
         required: true
         default: xhigh
         type: string
-      allow_code_push:
-        description: Allow Codex to commit and push scoped PR fixes for this dispatch
-        required: false
-        default: false
-        type: boolean
 
 permissions: {}
 
@@ -99,7 +45,8 @@ jobs:
   code-review:
     if: >-
       github.event_name != 'repository_dispatch' ||
-      github.event.client_payload.github.payload.issue.state == 'open'
+      (github.actor == 'finn-devops' &&
+      github.event.client_payload.github.payload.issue.state == 'open')
     uses: EWA-Services/EWA-Actions/.github/workflows/shareable-code-review.yaml@main
     permissions:
       actions: write
@@ -109,36 +56,32 @@ jobs:
       pull-requests: write
     with:
       actions_ref: main
-      provider: ${{ inputs.provider || 'codex' }}
       pr_number: >-
         ${{ github.event.client_payload.github.payload.issue.number ||
             inputs.pr_number || '' }}
-      trigger_type: >-
-        ${{ github.event_name == 'repository_dispatch' && 'pr_event' ||
-            inputs.trigger_type || 'pr_event' }}
       comment_body: >-
-        ${{ github.event.client_payload.github.payload.comment.body ||
-            inputs.comment_body || '' }}
+        ${{ github.event.client_payload.github.payload.comment.body || '' }}
       comment_author: >-
         ${{ github.event.client_payload.github.payload.comment.user.login ||
-            inputs.comment_author || 'manual-dispatch' }}
+            'manual-dispatch' }}
       comment_id: >-
-        ${{ github.event.client_payload.github.payload.comment.id ||
-            inputs.comment_id || '' }}
-      parent_comment_id: ${{ inputs.parent_comment_id || '' }}
-      file_path: ${{ inputs.file_path || '' }}
-      line_number: ${{ inputs.line_number || '' }}
+        ${{ github.event.client_payload.github.payload.comment.id || '' }}
+      ai_review_override_approvers: >-
+        ${{ vars.AI_REVIEW_OVERRIDE_APPROVERS || 'jai' }}
       codex_version: ${{ inputs.codex_version || 'latest' }}
       codex_model: ${{ inputs.codex_model || 'gpt-5.6-sol' }}
       codex_reasoning_effort: ${{ inputs.codex_reasoning_effort || 'xhigh' }}
-      allow_code_push: ${{ inputs.allow_code_push || false }}
+      dispatch_command: >-
+        ${{ github.event.client_payload.slash_command.command || '' }}
+      dispatch_issue_state: >-
+        ${{ github.event.client_payload.github.payload.issue.state || '' }}
+      dispatch_event_action: >-
+        ${{ github.event.client_payload.github.payload.action || '' }}
+      dispatch_previous_body: >-
+        ${{ github.event.client_payload.github.payload.changes.body.from || '' }}
     secrets:
       FINN_DEVOPS_PERSONAL_ACCESS_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
-      PPLX_API_KEY: ${{ secrets.PPLX_API_KEY }}
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
       CODEX_AUTH_ALERT_WEBHOOK_URL: ${{ secrets.CODEX_AUTH_ALERT_WEBHOOK_URL }}
       FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
-      GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
-      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-      GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
 # yamllint enable rule:line-length
