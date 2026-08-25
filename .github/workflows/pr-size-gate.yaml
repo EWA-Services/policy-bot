@@ -23,6 +23,7 @@ jobs:
       startsWith(github.event.changes.body.from, 'size override:'))
     permissions:
       actions: write
+      contents: read
       pull-requests: read
     concurrency:
       group: pr-size-rerun-${{ github.repository }}-${{ github.event.issue.number }}
