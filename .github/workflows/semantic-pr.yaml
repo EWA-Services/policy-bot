@@ -15,7 +15,6 @@ permissions: {}
 
 jobs:
   validate-pr-title-and-description:
-    continue-on-error: true
     name: Validate PR Title and Description
     runs-on: finn-runners
     permissions:
@@ -27,6 +26,22 @@ jobs:
         if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
         run: echo "✅ Dependabot PR detected - semantic PR validation skipped for dependency automation."
 
+      - name: Reject chore titles from human authors
+        if: >-
+          ${{
+            github.event.pull_request.user.type != 'Bot' &&
+            github.event.pull_request.user.login != 'finn-devops' &&
+            (
+              startsWith(github.event.pull_request.title, 'chore:') ||
+              startsWith(github.event.pull_request.title, 'chore(') ||
+              startsWith(github.event.pull_request.title, 'chore!')
+            )
+          }}
+        run: |
+          echo "chore is reserved for automation PRs (release tooling, dependency bots)." >&2
+          echo "Use a specific type instead: fix, feat, refactor, test, docs, ci, or build." >&2
+          exit 1
+
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50  # v6.1.1
         id: validate-title
         if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
@@ -35,7 +50,7 @@ jobs:
         with:
           # Default types can be found here:
           # https://github.com/commitizen/conventional-commit-types/blob/master/index.json
-          # Notes: chore - Cannot be removed currently, as some workflows still rely on this type to perform releases.
+          # Notes: chore - Kept for bot authors only (release tooling, dependency bots); a separate step rejects chore titles from human authors.
           types: |
             build
             chore
