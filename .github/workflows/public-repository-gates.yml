@@ -22,7 +22,7 @@ permissions:
 jobs:
   semantic-pr:
     name: Validate PR Title and Description
-    runs-on: ubicloud-standard-2
+    runs-on: finn-runners
     steps:
       - name: Validate pull request title
         if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
@@ -98,7 +98,7 @@ jobs:
 
   ai-assistance-disclosure:
     name: ai-assistance-disclosure / AI Label Check
-    runs-on: ubicloud-standard-2
+    runs-on: finn-runners
     steps:
       - name: Validate AI usage details
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
