@@ -1,5 +1,3 @@
-# This workflow file is synchronized from EWA-Services/EWA-Actions
-# Do not modify this file directly, all changes will be lost/overwritten
 ---
 name: PR Metadata Gate
 
@@ -22,15 +20,13 @@ permissions: {}
 
 jobs:
   metadata-gate:
-    uses: EWA-Services/EWA-Actions/.github/workflows/shareable-pr-metadata-gate.yaml@main
+    uses: ./.github/workflows/local-pr-metadata-gate.yaml
     permissions:
       actions: write
       checks: write
       contents: read
       issues: write
       pull-requests: write
-    with:
-      actions_ref: main
     secrets:
       FINN_DEVOPS_PERSONAL_ACCESS_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}

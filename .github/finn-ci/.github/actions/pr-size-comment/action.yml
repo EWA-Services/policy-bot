@@ -1,0 +1,50 @@
+---
+name: PR Size Comment
+description: Persist the single reviewable PR-size marker comment.
+
+inputs:
+  github-token:
+    description: GitHub token used to read and write pull-request comments.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  pull-request-number:
+    description: Pull-request number whose marker comment is updated.
+    required: true
+  mode:
+    description: PR-size mode, either warn or enforce.
+    required: true
+  reviewable-loc:
+    description: Measured reviewable lines of code.
+    required: true
+  reviewable-files:
+    description: Measured reviewable file count.
+    required: true
+  warned:
+    description: Whether the warning threshold was exceeded.
+    required: true
+  blocked:
+    description: Whether enforcement blocked the pull request.
+    required: true
+  override-actor:
+    description: Effective override actor, or empty.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_SIZE_BLOCKED: ${{ inputs.blocked }}
+        PR_SIZE_FILES: ${{ inputs.reviewable-files }}
+        PR_SIZE_LOC: ${{ inputs.reviewable-loc }}
+        PR_SIZE_MODE: ${{ inputs.mode }}
+        PR_SIZE_OVERRIDE_ACTOR: ${{ inputs.override-actor }}
+        PR_SIZE_PR_NUMBER: ${{ inputs.pull-request-number }}
+        PR_SIZE_REPOSITORY: ${{ inputs.repository }}
+        PR_SIZE_WARNED: ${{ inputs.warned }}
+      run: >-
+        "${{ github.action_path }}/update-comment.sh"

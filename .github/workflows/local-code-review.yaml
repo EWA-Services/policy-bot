@@ -1,0 +1,785 @@
+# Reusable Direct CLI Code Review Workflow
+#
+# yamllint disable rule:line-length
+---
+name: Code Review
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: false
+        default: ""
+        type: string
+      comment_body:
+        description: Exact slash command forwarded by repository dispatch
+        required: false
+        default: ""
+        type: string
+      comment_author:
+        description: Actor forwarded by repository dispatch
+        required: false
+        default: manual-dispatch
+        type: string
+      comment_id:
+        description: Slash-command comment identifier
+        required: false
+        default: ""
+        type: string
+      ai_review_override_approvers:
+        description: GitHub logins allowed to override AI review
+        required: false
+        default: jai
+        type: string
+      dispatch_command:
+        description: Command name forwarded by Slash Command Dispatch
+        required: false
+        default: ""
+        type: string
+      dispatch_issue_state:
+        description: Pull-request state forwarded by Slash Command Dispatch
+        required: false
+        default: ""
+        type: string
+      dispatch_event_action:
+        description: Comment action forwarded by Slash Command Dispatch
+        required: false
+        default: ""
+        type: string
+      dispatch_previous_body:
+        description: Previous comment body forwarded for edit events
+        required: false
+        default: ""
+        type: string
+      codex_version:
+        description: Codex CLI version to install for direct CLI runs (latest or exact semver)
+        required: false
+        default: latest
+        type: string
+      codex_model:
+        description: Codex model to use for direct CLI runs
+        required: false
+        default: gpt-5.6-sol
+        type: string
+      codex_reasoning_effort:
+        description: Codex reasoning effort for direct CLI runs (none|low|medium|high|xhigh)
+        required: false
+        default: xhigh
+        type: string
+    secrets:
+      FINN_DEVOPS_PERSONAL_ACCESS_TOKEN:
+        required: true
+      CODEX_AUTH_JSON:
+        required: false
+      CODEX_AUTH_ALERT_WEBHOOK_URL:
+        required: false
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY:
+        required: false
+      AI_REVIEW_TELEMETRY_SUPABASE_URL:
+        required: false
+      AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY:
+        required: false
+
+permissions: {}
+
+env:
+  EXPECTED_REVIEW_GH_LOGIN: finn-devops
+
+jobs:
+  welcome:
+    name: Welcome message
+    runs-on: finn-runners
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Check for existing welcome message
+        id: check-welcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          existing_count="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --jq '[.[] | select(.body | contains("**Code Review Assistant**"))] | length')"
+          if [ "${existing_count}" -gt 0 ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post welcome message
+        if: steps.check-welcome.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body "$(cat <<'EOF'
+          🤖 **Code Review Assistant**
+
+          AI-powered reviews use **GPT-5.6 Sol** with `xhigh` reasoning and the canonical `finn-pr-review` skill.
+
+          **How to trigger a review:**
+          - Comment exactly `/review` for a full PR inspection
+          - An authorized approver can comment exactly `/ai-review-override` to accept the current PR head without another AI inspection
+          - Comment exactly `/ai-review-breaker-reset` to resume a paused AI review:
+            - Art or Bhargav can reset after 5 or fewer decisive AI reviews
+            - Poom can reset after 10 or fewer decisive AI reviews
+            - Jai can reset at any review count
+
+          **Review behavior:**
+          - `finn-pr-review` owns the review method and decision policy
+          - The trusted wrapper publishes the skill's **APPROVE** or **REQUEST_CHANGES** decision
+          - A **WAIT** decision publishes an informational review and keeps the review check non-green
+
+          _Note: Full reviews run automatically when a draft PR is marked ready for review._
+          EOF
+          )"
+
+  resolve-context:
+    name: Resolve review context
+    runs-on: finn-runners
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'repository_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action == 'ready_for_review')
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.resolve.outputs.should_run }}
+      check_required: ${{ steps.resolve.outputs.check_required }}
+      run_codex: ${{ steps.resolve.outputs.run_codex }}
+      target_pr_number: ${{ steps.resolve.outputs.target_pr_number }}
+      comment_author: ${{ steps.resolve.outputs.comment_author }}
+      comment_id: ${{ steps.resolve.outputs.comment_id }}
+      force_full_review: ${{ steps.resolve.outputs.force_full_review }}
+      breaker_reset_actor: ${{ steps.resolve.outputs.breaker_reset_actor }}
+      breaker_reset_comment_id: ${{ steps.resolve.outputs.breaker_reset_comment_id }}
+      review_override_actor: ${{ steps.resolve.outputs.review_override_actor }}
+      codex_version: ${{ steps.resolve.outputs.codex_version }}
+      codex_model: ${{ steps.resolve.outputs.codex_model }}
+      codex_reasoning_effort: ${{ steps.resolve.outputs.codex_reasoning_effort }}
+
+    steps:
+      - name: Validate review GitHub token identity
+        env:
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          actual_login="$(gh api user --jq .login)"
+          if [ "${actual_login}" != "${EXPECTED_REVIEW_GH_LOGIN}" ]; then
+            echo "::error::FINN_DEVOPS_PERSONAL_ACCESS_TOKEN resolves to '${actual_login}', expected '${EXPECTED_REVIEW_GH_LOGIN}'." >&2
+            exit 1
+          fi
+
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Resolve trigger and comment context
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr_number }}
+          DISPATCH_COMMENT_BODY: ${{ inputs.comment_body }}
+          DISPATCH_COMMENT_AUTHOR: ${{ inputs.comment_author }}
+          DISPATCH_COMMENT_ID: ${{ inputs.comment_id }}
+          AI_REVIEW_OVERRIDE_APPROVERS: ${{ inputs.ai_review_override_approvers }}
+          DISPATCH_COMMAND: ${{ inputs.dispatch_command }}
+          DISPATCH_ISSUE_STATE: ${{ inputs.dispatch_issue_state }}
+          DISPATCH_EVENT_ACTION: ${{ inputs.dispatch_event_action }}
+          DISPATCH_PREVIOUS_BODY: ${{ inputs.dispatch_previous_body }}
+          CODEX_VERSION_INPUT: ${{ inputs.codex_version }}
+          CODEX_MODEL_INPUT: ${{ inputs.codex_model }}
+          CODEX_REASONING_EFFORT_INPUT: ${{ inputs.codex_reasoning_effort }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/code_review/code_review_workflow.py resolve-context
+
+      - name: Validate resolved review inputs
+        if: steps.resolve.outputs.should_run == 'true'
+        env:
+          PR_NUMBER: ${{ steps.resolve.outputs.target_pr_number }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/code_review/code_review_breaker_publish.py validate-inputs \
+            --pr-number "$PR_NUMBER"
+
+  ai-review-check-start:
+    name: Prepare finn-ai-coder review target
+    needs: resolve-context
+    if: >-
+      ${{
+        needs.resolve-context.outputs.should_run == 'true' &&
+        needs.resolve-context.outputs.check_required == 'true'
+      }}
+    runs-on: finn-runners
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      action: ${{ steps.gate.outputs.action || steps.breaker-reset.outputs.action }}
+      base_sha: ${{ steps.target.outputs.base_sha }}
+      diff_signature: ${{ steps.target.outputs.diff_signature }}
+      head_sha: ${{ steps.target.outputs.head_sha }}
+    env:
+      TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Resolve AI review target
+        id: target
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/finn_ai_coder_github_app.py resolve-target \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER"
+
+      - name: Apply approved AI review breaker reset
+        id: breaker-reset
+        if: needs.resolve-context.outputs.breaker_reset_actor != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ steps.target.outputs.head_sha }}
+          RESET_ACTOR: ${{ needs.resolve-context.outputs.breaker_reset_actor }}
+          RESET_COMMENT_ID: ${{ needs.resolve-context.outputs.breaker_reset_comment_id }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/code_review/code_review_breaker_publish.py reset \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD" \
+            --actor "$RESET_ACTOR" \
+            --comment-id "$RESET_COMMENT_ID"
+
+      - name: Create finn-ai-coder GitHub App token
+        id: finn-ai-coder-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-pull-requests: read
+
+      - name: Evaluate pre-review gate
+        id: gate
+        if: >-
+          ${{
+            needs.resolve-context.outputs.breaker_reset_actor == '' ||
+            steps.breaker-reset.outputs.action == 'applied'
+          }}
+        env:
+          GH_TOKEN: ${{ steps.finn-ai-coder-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ steps.target.outputs.head_sha }}
+          DIFF_SIGNATURE: ${{ steps.target.outputs.diff_signature }}
+          CODEX_MODEL: ${{ needs.resolve-context.outputs.review_override_actor == '' && needs.resolve-context.outputs.codex_model || '' }}
+          FORCE_FULL_REVIEW: ${{ needs.resolve-context.outputs.force_full_review }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/code_review_gate.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD" \
+            --diff-signature "$DIFF_SIGNATURE" \
+            --force-full-review "$FORCE_FULL_REVIEW" \
+            --model "$CODEX_MODEL" \
+            --external-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:review"
+
+  codex-direct-cli:
+    name: Codex direct CLI code review
+    needs:
+      - resolve-context
+      - ai-review-check-start
+    if: >-
+      ${{
+        always() &&
+        needs.resolve-context.outputs.should_run == 'true' &&
+        needs.resolve-context.outputs.run_codex == 'true' &&
+        (
+          needs.resolve-context.outputs.check_required != 'true' ||
+          (
+            needs.ai-review-check-start.result == 'success' &&
+            needs.ai-review-check-start.outputs.action == 'run'
+          )
+        )
+      }}
+    runs-on: finn-runners
+    timeout-minutes: 30
+    concurrency:
+      group: code-review-${{ github.repository }}-${{ needs.resolve-context.outputs.check_required == 'true' && needs.resolve-context.outputs.target_pr_number || github.run_id }}
+      cancel-in-progress: true
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      verdict: ${{ steps.codex-parse.outputs.verdict }}
+      verdict_reason_base64: ${{ steps.codex-parse.outputs.verdict_reason_base64 }}
+      findings_base64: ${{ steps.codex-parse.outputs.findings_base64 }}
+      skill_catalog_sha: ${{ steps.skill-catalog.outputs.sha }}
+      full_review_performed: ${{ steps.codex-parse.outputs.full_review_performed }}
+      review_invocation_id: ${{ steps.review-invocation.outputs.id }}
+      telemetry: ${{ steps.telemetry.outputs.telemetry }}
+    env:
+      TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
+      CODEX_VERSION: ${{ needs.resolve-context.outputs.codex_version }}
+      CODEX_MODEL: ${{ needs.resolve-context.outputs.codex_model }}
+      CODEX_REASONING_EFFORT: ${{ needs.resolve-context.outputs.codex_reasoning_effort }}
+      CHECK_REQUIRED: ${{ needs.resolve-context.outputs.check_required }}
+      REVIEW_HEAD_SHA: ${{ needs.ai-review-check-start.outputs.head_sha }}
+      REVIEW_DIFF_SIGNATURE: ${{ needs.ai-review-check-start.outputs.diff_signature }}
+      CODEX_COMMENT_LOGIN: finn-ai-coder[bot]
+
+    steps:
+      - name: Identify AI review invocation
+        id: review-invocation
+        run: printf 'id=%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.REVIEW_HEAD_SHA }}
+          fetch-depth: 0
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          persist-credentials: false
+
+      - name: Prepare Codex home
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+        run: mkdir -p "$CODEX_HOME"
+
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: .ci-source-helper
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Stage code-review workflow helper
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/scripts/code_review"
+          cp .ci-source-helper/.github/finn-ci/scripts/code_review/*.py "${RUNNER_TEMP}/scripts/code_review/"
+          cp .ci-source-helper/.github/finn-ci/scripts/code_review_alerts.py "${RUNNER_TEMP}/scripts/"
+          cp .ci-source-helper/.github/finn-ci/scripts/code_review_common.py "${RUNNER_TEMP}/scripts/"
+          cp .ci-source-helper/.github/finn-ci/scripts/override_commands.py "${RUNNER_TEMP}/scripts/"
+
+      - name: Create Codex GitHub interaction token
+        id: codex-github-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          permission-checks: read
+          permission-issues: read
+          permission-pull-requests: read
+
+      - name: Validate AI review skill catalog token
+        env:
+          AI_REVIEW_SKILL_CATALOG_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+        run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_skills.py" validate-catalog-token
+
+      - name: Checkout AI review skill catalog
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: EWA-Services/agent-resources
+          ref: main
+          path: .agent-resources
+          sparse-checkout: |
+            /skills/finn-pr-review/
+            /skills/finn-coding-standards/
+          sparse-checkout-cone-mode: false
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          persist-credentials: false
+
+      - name: Record AI review skill catalog revision
+        id: skill-catalog
+        run: echo "sha=$(git -C .agent-resources rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install AI review skill
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+        run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_skills.py" install
+
+      - name: Setup Ruby for the AI review skill
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0
+        with:
+          ruby-version: "3.3"
+
+      - name: Setup Go for the AI review skill
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: 1.26.x
+
+      - name: Validate Codex auth input
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CODEX_AUTH_JSON:-}" ]; then
+            echo "Need CODEX_AUTH_JSON to run the direct Codex CLI review workflow." >&2
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install Codex CLI
+        run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_tooling.py" install-codex
+
+      - name: Configure Codex authentication
+        id: codex-auth
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+          HOME: ${{ runner.temp }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_codex.py" authenticate
+
+      - name: Run Codex CLI directly
+        id: codex-run
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+          HOME: ${{ runner.temp }}
+          CODEX_GITHUB_TOKEN: ${{ steps.codex-github-token.outputs.token }}
+          REVIEW_GH_TOKEN: ""
+        # Codex receives read-only GitHub credentials; the trusted wrapper publishes the result.
+        run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_codex.py" run
+
+      - name: Alert on Codex auth invalidation
+        if: failure() && (steps.codex-auth.outputs.exit_code != '' || steps.codex-run.outputs.exit_code != '')
+        env:
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          CODEX_AUTH_ALERT_WEBHOOK_URL: ${{ secrets.CODEX_AUTH_ALERT_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          python3 "${RUNNER_TEMP}/scripts/code_review/code_review_workflow.py" notify-codex-auth-failure \
+            --error-log codex-error.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --job-name "code-review / Codex direct CLI code review" \
+            --model "$CODEX_MODEL" \
+            --secret-name CODEX_AUTH_JSON
+
+      - name: Parse Codex review result
+        id: codex-parse
+        run: |
+          set -euo pipefail
+          python3 "${RUNNER_TEMP}/scripts/code_review/code_review_workflow.py" parse-review-result
+
+      - name: Prepare count-only review telemetry
+        id: telemetry
+        continue-on-error: true
+        run: python3 "${RUNNER_TEMP}/scripts/code_review/review_telemetry_workflow.py" review
+
+  shadow-admission:
+    name: Filter blocking AI review findings
+    needs:
+      - resolve-context
+      - ai-review-check-start
+      - codex-direct-cli
+    if: >-
+      ${{
+        always() &&
+        needs.codex-direct-cli.result == 'success' &&
+        needs.codex-direct-cli.outputs.verdict == 'REQUEST_CHANGES'
+      }}
+    runs-on: finn-runners
+    timeout-minutes: 10
+    continue-on-error: true
+    outputs:
+      status: ${{ steps.admission.outputs.status }}
+      classification: ${{ steps.admission.outputs.classification }}
+      reason_base64: ${{ steps.admission.outputs.reason_base64 }}
+      telemetry: ${{ steps.admission.outputs.telemetry }}
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: .ci-source-shadow-helper
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Create read-only shadow GitHub token
+        id: shadow-github-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          permission-checks: read
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
+
+      - name: Run admission check
+        id: admission
+        uses: ./.ci-source-shadow-helper/.github/finn-ci/.github/actions/code-review-shadow-admission
+        with:
+          repository: ${{ github.repository }}
+          pr-number: ${{ needs.resolve-context.outputs.target_pr_number }}
+          base-sha: ${{ needs.ai-review-check-start.outputs.base_sha }}
+          head-sha: ${{ needs.ai-review-check-start.outputs.head_sha }}
+          diff-signature: ${{ needs.ai-review-check-start.outputs.diff_signature }}
+          trusted-review-reason-base64: ${{ needs.codex-direct-cli.outputs.verdict_reason_base64 }}
+          trusted-review-findings-base64: ${{ needs.codex-direct-cli.outputs.findings_base64 }}
+          skill-catalog-sha: ${{ needs.codex-direct-cli.outputs.skill_catalog_sha }}
+          github-token: ${{ steps.shadow-github-token.outputs.token }}
+          skill-catalog-token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          codex-version: ${{ needs.resolve-context.outputs.codex_version }}
+
+  ai-review-check-finish:
+    name: Finish finn-ai-coder review check
+    needs:
+      - resolve-context
+      - ai-review-check-start
+      - codex-direct-cli
+      - shadow-admission
+    if: >-
+      ${{
+        always() &&
+        needs.resolve-context.outputs.should_run == 'true' &&
+        needs.resolve-context.outputs.check_required == 'true' &&
+        needs.ai-review-check-start.outputs.action == 'run'
+      }}
+    runs-on: finn-runners
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: write
+    env:
+      TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
+      CHECK_REQUIRED: ${{ needs.resolve-context.outputs.check_required }}
+      RUN_CODEX: ${{ needs.resolve-context.outputs.run_codex }}
+      START_RESULT: ${{ needs.ai-review-check-start.result }}
+      CODEX_RESULT: ${{ needs.codex-direct-cli.result }}
+      CODEX_VERDICT: ${{ needs.codex-direct-cli.outputs.verdict }}
+      CODEX_REASON_BASE64: ${{ needs.codex-direct-cli.outputs.verdict_reason_base64 }}
+      CODEX_FULL_REVIEW: ${{ needs.codex-direct-cli.outputs.full_review_performed }}
+      CODEX_MODEL: ${{ needs.resolve-context.outputs.codex_model }}
+      REVIEW_OVERRIDE_ACTOR: ${{ needs.resolve-context.outputs.review_override_actor }}
+      ADMISSION_RESULT: ${{ needs.shadow-admission.outputs.status }}
+      ADMISSION_CLASSIFICATION: ${{ needs.shadow-admission.outputs.classification }}
+      ADMISSION_REASON_BASE64: ${{ needs.shadow-admission.outputs.reason_base64 }}
+      TELEMETRY_ENABLED: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_URL != '' && secrets.AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY != '' }}
+      REVIEW_INVOCATION_ID: ${{ needs.codex-direct-cli.outputs.review_invocation_id }}
+      REVIEW_DIFF_SIGNATURE: ${{ needs.ai-review-check-start.outputs.diff_signature }}
+      REVIEW_HEAD_SHA: ${{ needs.ai-review-check-start.outputs.head_sha }}
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Create finn-ai-coder GitHub App token
+        id: finn-ai-coder-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Resolve final AI review verdict
+        id: verdict
+        if: needs.ai-review-check-start.outputs.action == 'run'
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/code_review/code_review_workflow.py resolve-final-verdict \
+            --check-required "$CHECK_REQUIRED" \
+            --start-result "$START_RESULT" \
+            --run-codex "$RUN_CODEX" \
+            --codex-result "$CODEX_RESULT" \
+            --codex-verdict "$CODEX_VERDICT" \
+            --codex-reason-base64 "$CODEX_REASON_BASE64" \
+            --codex-full-review "$CODEX_FULL_REVIEW" \
+            --review-override-actor "$REVIEW_OVERRIDE_ACTOR" \
+            --admission-result "$ADMISSION_RESULT" \
+            --admission-classification "$ADMISSION_CLASSIFICATION" \
+            --admission-reason-base64 "$ADMISSION_REASON_BASE64"
+
+      - name: Publish AI review verdict
+        id: publish
+        if: >-
+          ${{
+            needs.ai-review-check-start.outputs.action == 'run' &&
+            steps.verdict.outputs.final_verdict != 'skipped'
+          }}
+        env:
+          GH_TOKEN: ${{ steps.finn-ai-coder-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FINAL_VERDICT: ${{ steps.verdict.outputs.final_verdict }}
+          PROVIDER: ${{ steps.verdict.outputs.provider }}
+          TITLE: ${{ steps.verdict.outputs.title }}
+          SUMMARY: ${{ steps.verdict.outputs.summary }}
+          PUBLISHED_MODEL: ${{ needs.resolve-context.outputs.review_override_actor == '' && needs.resolve-context.outputs.codex_model || '' }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/finn_ai_coder_github_app.py publish-result \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --expected-head "$REVIEW_HEAD_SHA" \
+            --expected-signature "$REVIEW_DIFF_SIGNATURE" \
+            --provider "$PROVIDER" \
+            --verdict "$FINAL_VERDICT" \
+            --reason "$SUMMARY" \
+            --title "$TITLE" \
+            --summary "$SUMMARY" \
+            --model "$PUBLISHED_MODEL" \
+            --review-invocation-id "$REVIEW_INVOCATION_ID" \
+            --details-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --external-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:review"
+
+      - name: Write published review telemetry
+        if: always() && steps.publish.outputs.action == 'published' && needs.codex-direct-cli.outputs.telemetry != '' && env.TELEMETRY_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          TELEMETRY_REVIEW: ${{ needs.codex-direct-cli.outputs.telemetry }}
+          TELEMETRY_ADMISSION: ${{ needs.shadow-admission.outputs.telemetry }}
+          FINAL_VERDICT: ${{ steps.verdict.outputs.final_verdict }}
+          SUPABASE_URL: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY }}
+        run: python3 ci-source/.github/finn-ci/scripts/code_review/review_telemetry_workflow.py publish
+
+      - name: Rerun PR metadata gate for published review
+        if: steps.publish.outputs.action == 'published'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/finn_ai_coder_github_app.py rerun-metadata-gate \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER"
+
+      - name: Create breaker analysis GitHub App token
+        id: breaker-analysis-token
+        if: steps.publish.outputs.evaluate_breaker == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          permission-checks: read
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
+
+      - name: Evaluate and apply AI review circuit breaker
+        if: always() && steps.publish.outputs.evaluate_breaker == 'true'
+        uses: ./ci-source/.github/finn-ci/.github/actions/code-review-breaker
+        with:
+          repository: ${{ github.repository }}
+          pr-number: ${{ env.TARGET_PR_NUMBER }}
+          head-sha: ${{ steps.publish.outputs.head_sha }}
+          github-token: ${{ github.token }}
+          analysis-github-token: ${{ steps.breaker-analysis-token.outputs.token }}
+          app-token: ${{ steps.finn-ai-coder-token.outputs.token }}
+          skill-catalog-token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          codex-version: ${{ needs.resolve-context.outputs.codex_version }}
+          codex-model: ${{ needs.resolve-context.outputs.codex_model }}
+          codex-reasoning-effort: ${{ needs.resolve-context.outputs.codex_reasoning_effort }}
+
+      - name: Fail workflow when AI review is not approved
+        if: >-
+          ${{
+            needs.ai-review-check-start.outputs.action == 'run' &&
+            steps.verdict.outputs.final_verdict != 'skipped' &&
+            (
+              steps.publish.outputs.action != 'published' ||
+              (
+                needs.resolve-context.outputs.review_override_actor != '' &&
+                steps.publish.outputs.check_published != 'true'
+              ) ||
+              (
+                steps.verdict.outputs.final_verdict != 'approved' &&
+                steps.verdict.outputs.final_verdict != 'requested_changes' &&
+                !(
+                  steps.verdict.outputs.final_verdict == 'none' &&
+                  needs.codex-direct-cli.result == 'success' &&
+                  needs.codex-direct-cli.outputs.full_review_performed == 'true' &&
+                  needs.codex-direct-cli.outputs.verdict == 'WAIT'
+                )
+              )
+            )
+          }}
+        env:
+          PUBLISH_ACTION: ${{ steps.publish.outputs.action }}
+          SUMMARY: ${{ steps.verdict.outputs.summary }}
+        run: |
+          echo "$SUMMARY (publish action: ${PUBLISH_ACTION:-unknown})" >&2
+          exit 1
+# yamllint enable rule:line-length

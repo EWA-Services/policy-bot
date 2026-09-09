@@ -1,5 +1,3 @@
-# This workflow file is synchronized from EWA-Services/EWA-Actions
-# Do not modify this file directly, all changes will be lost/overwritten
 #
 # yamllint disable rule:line-length
 ---
@@ -47,7 +45,7 @@ jobs:
       github.event_name != 'repository_dispatch' ||
       (github.actor == 'finn-devops' &&
       github.event.client_payload.github.payload.issue.state == 'open')
-    uses: EWA-Services/EWA-Actions/.github/workflows/shareable-code-review.yaml@main
+    uses: ./.github/workflows/local-code-review.yaml
     permissions:
       actions: write
       checks: read
@@ -55,7 +53,6 @@ jobs:
       issues: write
       pull-requests: write
     with:
-      actions_ref: main
       pr_number: >-
         ${{ github.event.client_payload.github.payload.issue.number ||
             inputs.pr_number || '' }}

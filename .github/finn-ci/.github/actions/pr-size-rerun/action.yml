@@ -1,0 +1,29 @@
+---
+name: Rerun PR Size
+description: Rerun the current-head pull-request PR-size workflow after it completes.
+
+inputs:
+  github-token:
+    description: GitHub token with pull-request read and Actions write access.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  current-run-id:
+    description: Issue-comment workflow run used to resolve the workflow identity.
+    required: true
+  pull-request-number:
+    description: Pull request whose current-head workflow run must be rerun.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: >-
+        "${{ github.action_path }}/rerun-pr-size.sh"
+        "${{ inputs.repository }}"
+        "${{ inputs.current-run-id }}"
+        "${{ inputs.pull-request-number }}"

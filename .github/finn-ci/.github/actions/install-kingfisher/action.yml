@@ -1,0 +1,12 @@
+name: Install Kingfisher
+description: Install a checksum-verified Kingfisher binary on a Linux runner
+author: EWA Services
+
+runs:
+  using: composite
+  steps:
+    - name: Install Kingfisher
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "$ACTION_PATH/install-kingfisher.sh"

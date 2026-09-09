@@ -1,0 +1,40 @@
+name: Post Secret Scan Alert
+
+description: Publish a redacted secret-scan summary to Google Chat and a reusable GitHub issue comment.
+
+inputs:
+  report-path:
+    description: Path to the redacted Kingfisher JSON report.
+    required: true
+  github-token:
+    description: Built-in github.token used to update the pull request issue comment.
+    required: false
+  github-comment-author:
+    description: Login that owns the reusable comment when using a non-default token actor.
+    required: false
+    default: github-actions[bot]
+  google-chat-webhook:
+    description: Optional Google Chat incoming webhook URL.
+    required: false
+  scan-outcome:
+    description: Outcome of the Kingfisher scan step.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Publish secret scan alert
+      shell: bash
+      env:
+        REPORT_PATH: ${{ inputs.report-path }}
+        GITHUB_API_URL: ${{ github.api_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_COMMENT_AUTHOR: ${{ inputs.github-comment-author }}
+        GOOGLE_CHAT_SECURITY_SCAN_SECRET_WEBHOOK: ${{ inputs.google-chat-webhook }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        SCAN_OUTCOME: ${{ inputs.scan-outcome }}
+      run: python3 "${{ github.action_path }}/../../scripts/secret_scan_alert.py"

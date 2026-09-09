@@ -1,0 +1,37 @@
+---
+name: Reviewable PR Size
+description: Measure reviewable pull-request lines and files using a gitignore policy.
+
+inputs:
+  base-sha:
+    description: Commit at the base of the pull request diff.
+    required: true
+  head-sha:
+    description: Commit at the head of the pull request diff.
+    required: true
+  ignore-file:
+    description: Gitignore policy file for excluded paths; trusted callers may use an absolute path.
+    required: false
+    default: .pr-size-ignore
+
+outputs:
+  raw-loc:
+    description: Added and deleted text lines before review exclusions.
+    value: ${{ steps.measure.outputs.raw_loc }}
+  reviewable-loc:
+    description: Reviewable changed lines, counting a modified line once.
+    value: ${{ steps.measure.outputs.reviewable_loc }}
+  reviewable-files:
+    description: Reviewable changed files, including binary files.
+    value: ${{ steps.measure.outputs.reviewable_files }}
+
+runs:
+  using: composite
+  steps:
+    - id: measure
+      shell: bash
+      env:
+        PR_SIZE_IGNORE: ${{ inputs.ignore-file }}
+      run: >-
+        "${{ github.action_path }}/pr-size.sh" "${{ inputs.base-sha }}"
+        "${{ inputs.head-sha }}" >> "$GITHUB_OUTPUT"

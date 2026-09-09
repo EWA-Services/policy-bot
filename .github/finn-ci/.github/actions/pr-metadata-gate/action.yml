@@ -1,0 +1,330 @@
+# Org-wide composite action: consumed from this repo only.
+# Workflows use: EWA-Services/EWA-Actions/.github/actions/pr-metadata-gate@main
+---
+name: PR Metadata Gate
+description: >-
+  Validates PR title/body with Codex, checks for an AI review, and posts the
+  metadata gate comment.
+inputs:
+  github_token:
+    description: GITHUB_TOKEN with contents, pull-requests, actions as needed
+    required: true
+  codex_auth_json:
+    description: Auth JSON for the Codex CLI
+    required: false
+  perform_checkout:
+    description: Whether the composite action should check out the repository itself
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      if: inputs.perform_checkout != 'false'
+    - name: Determine trigger context
+      id: determine
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action || '' }}
+        PR_NUMBER_PR: ${{ github.event.pull_request.number || '' }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+        ISSUE_NUMBER: ${{ github.event.issue.number || '' }}
+        ISSUE_PR_URL: ${{ github.event.issue.pull_request.html_url || '' }}
+        COMMENT_BODY: ${{ github.event.comment.body || '' }}
+        COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+        REVIEW_BODY: ${{ github.event.review.body || '' }}
+        REVIEW_AUTHOR: ${{ github.event.review.user.login || '' }}
+        REPO_FULL: ${{ github.repository }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        GITHUB_ACTOR: ${{ github.actor }}
+      shell: bash
+      run: python3 "${{ github.action_path }}/scripts/pr_metadata_gate.py" determine-context
+
+    - name: Fetch PR metadata
+      if: steps.determine.outputs.should_run == 'true'
+      id: pr-data
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+      shell: bash
+      run: python3 "${{ github.action_path }}/scripts/pr_metadata_gate.py" fetch-pr-data
+
+    - name: Build Codex prompt
+      if: steps.determine.outputs.should_run == 'true'
+      id: codex-prompt
+      env:
+        REPO_FULL: ${{ github.repository }}
+        PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+        PR_TITLE: ${{ steps.pr-data.outputs.title }}
+        PR_AUTHOR: ${{ steps.pr-data.outputs.author }}
+        PR_BODY: ${{ steps.pr-data.outputs.body }}
+        RUNNER_TEMP: ${{ runner.temp }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        prompt_file="${RUNNER_TEMP}/codex-metadata-prompt.txt"
+        python3 <<'PY'
+        import os
+        import textwrap
+        from pathlib import Path
+
+        repo_full = os.environ.get("REPO_FULL") or ""
+        pr_number = os.environ.get("PR_NUMBER") or ""
+        pr_title = os.environ.get("PR_TITLE") or ""
+        pr_author = os.environ.get("PR_AUTHOR") or ""
+        pr_body = os.environ.get("PR_BODY") or ""
+
+        prompt = textwrap.dedent(
+            """\
+            OUTPUT FORMAT IS CRITICAL. Output exactly one CODEX_DECISION line. No tool use. No exploration.
+
+            You are the PR metadata gatekeeper. Evaluate the pull request details below
+            and determine if it satisfies the repository authoring standards.
+
+            REPOSITORY: {repo_full}
+            PR_NUMBER: {pr_number}
+            PR_TITLE: "{pr_title}"
+            PR_AUTHOR: {pr_author}
+
+            PR_BODY (between delimiters):
+            <<<PR_BODY_START>>>
+            {pr_body}
+            <<<PR_BODY_END>>>
+
+            Checklist definitions from the PR template:
+            1. description — The checkbox labelled "I have provided a clear description of
+               the work in this PR (what and why)". This is satisfied only when the checkbox
+               is checked AND the PR body contains at least one sentence that clearly states
+               what changed and why it matters.
+
+            Tasks:
+            - Check the PR title and PR body for grammatical correctness and clarity.
+            - Do not fail title grammar or imperative checks solely because the first word
+              after a conventional commit prefix is lowercase (e.g., "feat: do this").
+              Capitalization does not affect imperative mood.
+            - Confirm the PR title uses the imperative mood (starts with a verb commanding
+              the action, per conventional commits). When a title could be read as either
+              imperative or another part of speech (e.g., "Integrate feature X"), assume
+              the author intended the imperative reading unless the context clearly shows
+              otherwise.
+            - Evaluate whether the description checklist item is both checked and actually
+              satisfied according to the definition above.
+            - If the title fails the imperative check, propose a concrete rewrite that uses
+              imperative mood (e.g., "Add ...", "Update ...").
+            - Provide actionable reasoning for any failures. If everything passes, keep the
+              notes list empty.
+
+            Output EXACTLY one machine-readable line using this JSON schema:
+            CODEX_DECISION::{{"titleGrammar":"pass|fail","imperativeTitle":"pass|fail","bodyGrammar":"pass|fail","checklist":[{{"item":"description","checked":true|false,"satisfied":true|false,"reason":"string"}}],"overallStatus":"pass|fail","notes":["string"]}}
+
+            Rules:
+            - Use lowercase true/false for booleans.
+            - If any field is "fail" or the checklist entry is unsatisfied, set
+              overallStatus to "fail" and include at least one short note explaining the
+              issue.
+            - Do not include any extra prose before or after the CODEX_DECISION line.
+            - Do not use any tools; respond directly with the CODEX_DECISION line only.
+            """
+        ).format(
+            repo_full=repo_full,
+            pr_number=pr_number,
+            pr_title=pr_title,
+            pr_author=pr_author,
+            pr_body=pr_body,
+        )
+        Path(os.environ["RUNNER_TEMP"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["RUNNER_TEMP"], "codex-metadata-prompt.txt").write_text(
+            prompt,
+            encoding="utf-8",
+        )
+        PY
+        echo "prompt_file=${prompt_file}" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Node
+      if: steps.determine.outputs.should_run == 'true'
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+      with:
+        node-version: "22"
+
+    - name: Resolve metadata gate provider
+      if: steps.determine.outputs.should_run == 'true'
+      id: provider
+      env:
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${CODEX_AUTH_JSON:-}" ]; then
+          echo "selected_provider=codex" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "Need CODEX_AUTH_JSON to run the PR metadata gate." >&2
+        exit 1
+
+    - name: Install Codex CLI
+      if: steps.determine.outputs.should_run == 'true' && steps.provider.outputs.selected_provider == 'codex'
+      shell: bash
+      run: |
+        npm install -g @openai/codex@latest
+        codex --version
+
+    - name: Configure Codex authentication
+      if: steps.determine.outputs.should_run == 'true' && steps.provider.outputs.selected_provider == 'codex'
+      env:
+        HOME: ${{ runner.temp }}/codex-home
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.codex"
+        printf '%s' "$CODEX_AUTH_JSON" > "$HOME/.codex/auth.json"
+        chmod 600 "$HOME/.codex/auth.json"
+        codex login status
+
+    - name: Run Codex metadata analysis (direct CLI)
+      if: steps.determine.outputs.should_run == 'true' && steps.provider.outputs.selected_provider == 'codex'
+      id: codex
+      env:
+        HOME: ${{ runner.temp }}/codex-home
+        PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+        CODEX_MODEL: gpt-5.5
+        CODEX_REASONING_EFFORT: xhigh
+        PROMPT_FILE: ${{ steps.codex-prompt.outputs.prompt_file }}
+        RUNNER_TEMP: ${{ runner.temp }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_file="${RUNNER_TEMP}/codex-metadata-output.txt"
+        stdout_file="${RUNNER_TEMP}/codex-metadata-stdout.txt"
+        error_file="${RUNNER_TEMP}/codex-metadata-error.txt"
+        workspace_dir="${RUNNER_TEMP}/codex-metadata-workspace"
+        prompt_content="$(cat "$PROMPT_FILE")"
+        rm -rf "$workspace_dir"
+        mkdir -p "$workspace_dir"
+        set +e
+        (
+          cd "$workspace_dir"
+          codex -a never exec \
+            --skip-git-repo-check \
+            --ephemeral \
+            --model "${CODEX_MODEL}" \
+            -c "model_reasoning_effort=\"${CODEX_REASONING_EFFORT}\"" \
+            --sandbox read-only \
+            -o "$output_file" \
+            "$prompt_content"
+        ) > "$stdout_file" 2> "$error_file"
+        status=$?
+        set -e
+        {
+          echo "## Codex PR Metadata Gate"
+          echo
+          echo "- PR: #${PR_NUMBER}"
+          echo "- Codex model: ${CODEX_MODEL}"
+          echo "- Codex reasoning effort: ${CODEX_REASONING_EFFORT}"
+          echo "- Exit code: $status"
+          echo
+          if [ -f "$output_file" ]; then
+            echo "### Structured output"
+            echo '```'
+            cat "$output_file"
+            echo
+            echo '```'
+          elif [ -f "$error_file" ]; then
+            echo "### stderr"
+            echo '```'
+            cat "$error_file"
+            echo
+            echo '```'
+          else
+            echo "No Codex output or stderr was captured."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$status" -ne 0 ]; then
+          if [ -f "$error_file" ]; then
+            cat "$error_file" >&2
+          else
+            echo "Codex execution failed without an error file." >&2
+          fi
+          exit "$status"
+        fi
+        echo "output_file=${output_file}" >> "$GITHUB_OUTPUT"
+        cat "$output_file"
+
+    - name: Check for AI review
+      if: steps.determine.outputs.should_run == 'true'
+      id: ai-review
+      env:
+        PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: python3 "${{ github.action_path }}/scripts/pr_metadata_gate.py" detect-ai-review
+
+    - name: Parse Codex decision
+      if: steps.determine.outputs.should_run == 'true'
+      id: evaluate
+      env:
+        OUTPUT_FILE: ${{ steps.codex.outputs.output_file }}
+        RUNNER_TEMP: ${{ runner.temp }}
+        AI_REVIEW_STATUS: ${{ steps.ai-review.outputs.has_ai_review }}
+        AI_REVIEW_SOURCE: ${{ steps.ai-review.outputs.ai_review_source }}
+        AI_REVIEW_ACTOR: ${{ steps.ai-review.outputs.ai_review_actor }}
+        AI_REVIEW_URL: ${{ steps.ai-review.outputs.ai_review_url }}
+        AI_REVIEW_CREATED_AT: ${{ steps.ai-review.outputs.ai_review_created_at }}
+        PR_TITLE: ${{ steps.pr-data.outputs.title }}
+      shell: bash
+      run: python3 "${{ github.action_path }}/scripts/pr_metadata_gate.py" evaluate-codex
+
+    - name: Upsert metadata gate comment
+      if: steps.determine.outputs.should_run == 'true' && steps.evaluate.outputs.comment_path != ''
+      id: upsert-comment
+      env:
+        COMMENT_BODY_PATH: ${{ steps.evaluate.outputs.comment_path }}
+        PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      shell: bash
+      run: python3 "${{ github.action_path }}/scripts/pr_metadata_gate.py" upsert-comment
+
+    - name: Report metadata gate status
+      if: steps.determine.outputs.should_run == 'true'
+      env:
+        OVERALL_STATUS: ${{ steps.evaluate.outputs.overall_status }}
+        AI_REVIEW_STATUS: ${{ steps.ai-review.outputs.has_ai_review }}
+        COMMENT_URL: ${{ steps.upsert-comment.outputs.comment_url }}
+        COMMENT_PATH: ${{ steps.evaluate.outputs.comment_path }}
+        REASON: ${{ steps.determine.outputs.reason }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::PR metadata gate report"
+        echo "Trigger reason: ${REASON:-unknown}"
+        echo "Overall status: ${OVERALL_STATUS:-unknown}"
+        echo "AI review detected: ${AI_REVIEW_STATUS:-unknown}"
+        if [[ -n "${COMMENT_URL}" ]]; then
+          echo "Comment URL: ${COMMENT_URL}"
+        elif [[ -n "${COMMENT_PATH}" ]]; then
+          echo "Comment body stored at ${COMMENT_PATH}"
+        else
+          echo "No comment generated."
+        fi
+        echo "::endgroup::"
+
+    - name: Fail when requirements are unmet
+      if: >-
+        steps.determine.outputs.should_run == 'true' &&
+        (steps.evaluate.outputs.overall_status == 'fail' ||
+        steps.ai-review.outputs.has_ai_review != 'true')
+      env:
+        OVERALL_STATUS: ${{ steps.evaluate.outputs.overall_status }}
+        AI_REVIEW_STATUS: ${{ steps.ai-review.outputs.has_ai_review }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "$OVERALL_STATUS" == "fail" ]]; then
+          echo "Metadata gate flagged PR metadata issues. Blocking merge until resolved."
+        fi
+        if [[ "$AI_REVIEW_STATUS" != "true" ]]; then
+          echo "PR is missing an AI review." >&2
+          echo "Comment exactly /review on the PR to run an automated review." >&2
+        fi
+        exit 1

@@ -1,0 +1,169 @@
+---
+name: Filter blocking AI review findings
+description: Admit only blocking findings that meet the review proof standard
+
+inputs:
+  repository:
+    description: Repository containing the reviewed pull request
+    required: true
+  pr-number:
+    description: Reviewed pull request number
+    required: true
+  base-sha:
+    description: Exact trusted base SHA for repository requirements
+    required: true
+  head-sha:
+    description: Exact reviewed head SHA
+    required: true
+  diff-signature:
+    description: Normalized diff signature for the reviewed head
+    required: true
+  trusted-review-reason-base64:
+    description: Base64-encoded reason from the trusted REQUEST_CHANGES review
+    required: true
+  trusted-review-findings-base64:
+    description: Base64-encoded JSON array of the filtered structured findings behind the trusted review
+    required: true
+  skill-catalog-sha:
+    description: Exact EWA-Services/agent-resources commit the primary review installed its skills from
+    required: true
+  github-token:
+    description: Read-only GitHub App token for cited evidence
+    required: true
+  skill-catalog-token:
+    description: Token with read access to agent-resources
+    required: true
+  codex-auth-json:
+    description: Codex authentication JSON
+    required: true
+  codex-version:
+    description: Codex CLI version
+    required: true
+
+outputs:
+  telemetry:
+    description: Count-only admission and raw judge indices
+    value: ${{ steps.telemetry.outputs.telemetry }}
+  status:
+    description: success when admission returned a valid decision
+    value: ${{ steps.admission.outputs.status }}
+  classification:
+    description: Binary ADMIT or REJECT decision
+    value: ${{ steps.admission.outputs.classification }}
+  reason_base64:
+    description: Base64-encoded publication-ready admission reason
+    value: ${{ steps.admission.outputs.reason_base64 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout reviewed pull request head
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.head-sha }}
+        path: .shadow-reviewed-repository
+        token: ${{ inputs.github-token }}
+        persist-credentials: false
+
+    - name: Checkout trusted base revision
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.base-sha }}
+        path: .shadow-trusted-base-repository
+        token: ${{ inputs.github-token }}
+        persist-credentials: false
+
+    - name: Prepare shadow Codex home
+      env:
+        CODEX_HOME: ${{ runner.temp }}/shadow-codex-home
+        HOME: ${{ runner.temp }}/shadow-home
+        SHADOW_ADMISSION_WORKSPACE: ${{ runner.temp }}/shadow-admission-workspace
+      shell: bash
+      run: mkdir -p "$CODEX_HOME" "$HOME" "$SHADOW_ADMISSION_WORKSPACE"
+
+    - name: Checkout AI review skill catalog
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      with:
+        repository: EWA-Services/agent-resources
+        ref: ${{ inputs.skill-catalog-sha }}
+        path: .shadow-agent-resources
+        sparse-checkout: |
+          /skills/finn-pr-review/
+          /skills/finn-coding-standards/
+        sparse-checkout-cone-mode: false
+        token: ${{ inputs.skill-catalog-token }}
+        persist-credentials: false
+
+    - name: Install shadow review skill
+      env:
+        CODEX_HOME: ${{ runner.temp }}/shadow-codex-home
+      shell: bash
+      run: >-
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_skills.py" install
+        --catalog-root "${GITHUB_WORKSPACE}/.shadow-agent-resources"
+
+    - name: Setup Ruby for shadow admission
+      uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0
+      with:
+        ruby-version: "3.3"
+
+    - name: Setup Go for shadow admission
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      with:
+        go-version: 1.26.x
+
+    - name: Setup Node for shadow admission
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      with:
+        node-version: "22"
+
+    - name: Install Codex CLI for shadow admission
+      env:
+        CODEX_VERSION: ${{ inputs.codex-version }}
+      shell: bash
+      run: python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_tooling.py" install-codex
+
+    - name: Configure shadow Codex authentication
+      env:
+        CODEX_HOME: ${{ runner.temp }}/shadow-codex-home
+        HOME: ${{ runner.temp }}/shadow-home
+        CODEX_AUTH_JSON: ${{ inputs.codex-auth-json }}
+      shell: bash
+      run: python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_codex.py" authenticate
+
+    - name: Run admission check
+      id: admission
+      env:
+        CODEX_HOME: ${{ runner.temp }}/shadow-codex-home
+        HOME: ${{ runner.temp }}/shadow-home
+        CODEX_GITHUB_TOKEN: ${{ inputs.github-token }}
+        CODEX_TIMEOUT_SECONDS: "180"
+        GITHUB_REPOSITORY: ${{ inputs.repository }}
+        REVIEW_BASE_SHA: ${{ inputs.base-sha }}
+        REVIEW_DIFF_SIGNATURE: ${{ inputs.diff-signature }}
+        REVIEW_HEAD_SHA: ${{ inputs.head-sha }}
+        REVIEW_REPOSITORY_PATH: ${{ github.workspace }}/.shadow-reviewed-repository
+        SHADOW_ADMISSION_MODEL: gpt-5.6-luna
+        SHADOW_ADMISSION_REASONING_EFFORT: medium
+        TARGET_PR_NUMBER: ${{ inputs.pr-number }}
+        TRUSTED_REVIEW_REASON_BASE64: ${{ inputs.trusted-review-reason-base64 }}
+        TRUSTED_REVIEW_FINDINGS_BASE64: ${{ inputs.trusted-review-findings-base64 }}
+        TRUSTED_REVIEW_VERDICT: REQUEST_CHANGES
+        TRUSTED_BASE_REPOSITORY_PATH: ${{ github.workspace }}/.shadow-trusted-base-repository
+      shell: bash
+      working-directory: ${{ runner.temp }}/shadow-admission-workspace
+      run: python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_codex.py" shadow-admission
+
+    - name: Prepare count-only admission telemetry
+      id: telemetry
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ runner.temp }}/shadow-admission-workspace
+      run: python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/review_telemetry_workflow.py" admission
+
+    - name: Record admission error
+      if: failure()
+      shell: bash
+      run: echo 'SHADOW_ADMISSION_RESULT::{"status":"error"}'

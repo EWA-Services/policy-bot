@@ -1,0 +1,386 @@
+# Reusable PR Metadata Gate workflow.
+---
+name: PR Metadata Gate
+on:
+  workflow_call:
+    secrets:
+      FINN_DEVOPS_PERSONAL_ACCESS_TOKEN:
+        required: false
+      CODEX_AUTH_JSON:
+        required: false
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY:
+        required: false
+
+permissions: {}
+
+env:
+  AI_REVIEW_PATTERNS: >-
+    ["<!--\\s*direct-cli-review:codex\\s*-->",
+    "<!--\\s*finn-ai-coder-review-metadata","(?:^|\\n)##\\s*Codex Review\\b"]
+  AI_REVIEW_ACTOR_PATTERNS: >-
+    ["^finn-codex$","^finn-ai-coder\\[bot\\]$"]
+
+jobs:
+  metadata-quality:
+    name: Validate PR metadata with Codex
+    runs-on: finn-runners
+    # do not validate when user is finn-devops, or when the PR is authored by dependabot
+    if: >-
+      ${{
+        github.event_name == 'pull_request'
+        && github.actor != 'finn-devops'
+        && github.actor != 'dependabot[bot]'
+        && github.event.pull_request.user.login != 'dependabot[bot]'
+      }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - uses: ./ci-source/.github/finn-ci/.github/actions/pr-metadata-gate
+        with:
+          github_token: ${{ github.token }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+          perform_checkout: "false"
+
+  metadata-quality-ai-followup:
+    name: PR metadata gate (AI review follow-up)
+    runs-on: finn-runners
+    # Keep this job-level filter as a broad superset. The action applies the
+    # exact actor and marker rules after GitHub allocates the runner.
+    if: >-
+      ${{
+        (
+          github.event_name == 'pull_request_review' ||
+          github.event_name == 'pull_request_review_comment'
+        )
+        && github.actor != 'finn-devops'
+        && github.actor != 'dependabot[bot]'
+        && github.event.pull_request.user.login != 'dependabot[bot]'
+        &&
+        (
+          contains(
+            fromJSON('["finn-codex","finn-ai-coder[bot]"]'),
+            github.actor
+          ) ||
+          contains(
+            github.event.review.body || github.event.comment.body,
+            'direct-cli-review:codex'
+          ) ||
+          contains(
+            github.event.review.body || github.event.comment.body,
+            'finn-ai-coder-review-metadata'
+          ) ||
+          contains(
+            github.event.review.body || github.event.comment.body,
+            'Codex Review'
+          )
+        )
+      }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - uses: ./ci-source/.github/finn-ci/.github/actions/pr-metadata-gate
+        with:
+          github_token: ${{ github.token }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+          perform_checkout: "false"
+
+  ai-review-check-refresh:
+    name: Refresh finn-ai-coder review check
+    runs-on: finn-runners
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.user.login != 'finn-devops' &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      TARGET_PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Create finn-ai-coder GitHub App token
+        id: finn-ai-coder-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-pull-requests: read
+
+      - name: Recreate AI review check on current head SHA
+        id: refresh
+        env:
+          GH_TOKEN: ${{ steps.finn-ai-coder-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 ci-source/.github/finn-ci/scripts/finn_ai_coder_github_app.py refresh-check \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --name "finn-ai-coder / review" \
+            --external-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:metadata-refresh"
+
+      - name: Fail when current diff lacks approved AI review
+        if: steps.refresh.outputs.check_run_conclusion != 'success'
+        env:
+          CHECK_CONCLUSION: ${{ steps.refresh.outputs.check_run_conclusion }}
+        run: |
+          echo "finn-ai-coder review check is ${CHECK_CONCLUSION:-unknown} for the current PR diff." >&2
+          exit 1
+
+  rerun-metadata-gate:
+    name: Rerun PR Metadata Gate for AI review
+    if: >-
+      ${{
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.user.login != 'dependabot[bot]' &&
+          github.actor != 'finn-ai-coder[bot]' &&
+          (
+            contains(github.event.comment.body, 'direct-cli-review:codex') ||
+            contains(github.event.comment.body, 'finn-ai-coder-review-metadata') ||
+            contains(github.event.comment.body, 'Codex Review') ||
+            (
+              contains(
+                fromJSON('["finn-codex"]'),
+                github.actor
+              ) &&
+              (
+                contains(github.event.comment.body, 'Review posted on PR') ||
+                contains(github.event.comment.body, 'What I checked') ||
+                contains(github.event.comment.body, 'Inline comments added') ||
+                contains(github.event.comment.body, 'inline PR review comment') ||
+                contains(github.event.comment.body, 'I posted this as an inline')
+              )
+            )
+          )
+        )
+      }}
+    runs-on: finn-runners
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Rerun latest PR Metadata Gate on head commit
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const resolvePullRequest = async () => {
+              if (context.eventName === 'issue_comment') {
+                const issue = context.payload.issue;
+                const comment = context.payload.comment;
+
+                if (!issue?.pull_request) {
+                  core.info('Comment is not on a pull request. Skipping rerun.');
+                  return null;
+                }
+
+                if (!comment?.body || !comment.body.trim()) {
+                  core.info('Empty comment body. Skipping rerun.');
+                  return null;
+                }
+
+                if (comment.user?.login === 'github-actions[bot]') {
+                  core.info('Skipping rerun for comment from github-actions[bot].');
+                  return null;
+                }
+
+                if (comment.user?.login === 'finn-ai-coder[bot]') {
+                  core.info('Skipping rerun for finn-ai-coder[bot] issue comment.');
+                  return null;
+                }
+
+                const defaultPatterns = [
+                  '<!--\\s*direct-cli-review:codex\\s*-->',
+                  '<!--\\s*finn-ai-coder-review-metadata',
+                  '(?:^|\\n)##\\s*Codex Review\\b',
+                ];
+                const defaultActorPatterns = [
+                  '^finn-codex$',
+                  '^finn-ai-coder\\[bot\\]$',
+                ];
+                let patternSources;
+                try {
+                  patternSources = JSON.parse(process.env.AI_REVIEW_PATTERNS || '[]');
+                  if (!Array.isArray(patternSources) || patternSources.length === 0) {
+                    patternSources = defaultPatterns;
+                  }
+                } catch (error) {
+                  patternSources = defaultPatterns;
+                }
+
+                const aiPatterns = patternSources.map((pattern) => new RegExp(pattern, 'i'));
+                let actorPatterns = defaultActorPatterns;
+                try {
+                  actorPatterns = JSON.parse(
+                    process.env.AI_REVIEW_ACTOR_PATTERNS || '[]',
+                  );
+                  if (!Array.isArray(actorPatterns) || actorPatterns.length === 0) {
+                    actorPatterns = defaultActorPatterns;
+                  }
+                } catch (error) {
+                  actorPatterns = defaultActorPatterns;
+                }
+
+                const actorRegexes = actorPatterns.map((pattern) => new RegExp(pattern, 'i'));
+                const actorReviewMarkers = [
+                  /Review posted on PR/i,
+                  /What I checked/i,
+                  /Inline comments added/i,
+                  /inline PR review comment/i,
+                  /I posted this as an inline/i,
+                ];
+
+                const actorLogin = comment.user?.login || '';
+                const matchesActor =
+                  actorRegexes.some((regex) => regex.test(actorLogin)) &&
+                  actorReviewMarkers.some((regex) => regex.test(comment.body));
+                const matchesAI =
+                  aiPatterns.some((regex) => regex.test(comment.body)) || matchesActor;
+                if (!matchesAI) {
+                  core.info('Comment does not appear to be an AI review. Skipping rerun.');
+                  return null;
+                }
+
+                const { data: issuePr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: issue.number,
+                });
+                return issuePr;
+              }
+            };
+
+            const pullRequest = await resolvePullRequest();
+            if (!pullRequest) {
+              return;
+            }
+
+            const headSha = pullRequest.head.sha;
+            const headRef = pullRequest.head.ref;
+            const sleep = (milliseconds) => (
+              new Promise((resolve) => setTimeout(resolve, milliseconds))
+            );
+
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'pr-metadata-gate.yaml',
+              branch: headRef,
+              event: 'pull_request',
+              per_page: 100,
+            });
+
+            const targetRun = data.workflow_runs.find(run => run.head_sha === headSha);
+
+            if (!targetRun) {
+              core.setFailed(`No PR Metadata Gate workflow run found for ${headRef} (${headSha}).`);
+              return;
+            }
+
+            try {
+              await github.rest.actions.reRunWorkflow({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: targetRun.id,
+              });
+            } catch (error) {
+              const message = error?.response?.data?.message || error?.message || '';
+              if (error?.status !== 403 || !message.includes('This workflow is already running')) {
+                throw error;
+              }
+
+              core.info(
+                `PR Metadata Gate workflow run ${targetRun.id} is already running for ${headSha}.`,
+              );
+              core.info('Waiting for the active attempt before deciding whether to rerun.');
+              for (let attempt = 1; attempt <= 80; attempt += 1) {
+                await sleep(3000);
+                const { data: activeRun } = await github.rest.actions.getWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: targetRun.id,
+                });
+
+                if (activeRun.status !== 'completed') {
+                  core.info(
+                    `Attempt ${attempt}: run ${targetRun.id} is still ${activeRun.status}.`,
+                  );
+                  continue;
+                }
+
+                if (activeRun.conclusion === 'success') {
+                  core.info(`Run ${targetRun.id} completed successfully; no rerun needed.`);
+                  return;
+                }
+
+                await github.rest.actions.reRunWorkflow({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: targetRun.id,
+                });
+                core.info(
+                  `Triggered rerun for PR Metadata Gate workflow run ${targetRun.id} after ${activeRun.conclusion}.`,
+                );
+                return;
+              }
+
+              core.setFailed(
+                `PR Metadata Gate workflow run ${targetRun.id} did not finish before timeout.`,
+              );
+              return;
+            }
+
+            core.info(`Triggered rerun for PR Metadata Gate workflow run ${targetRun.id} on ${headSha}.`);
