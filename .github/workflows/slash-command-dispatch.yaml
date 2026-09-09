@@ -1,5 +1,3 @@
-# This file is synchronized from EWA-Services/EWA-Actions
-# Do not modify this file directly, all changes will be lost/overwritten
 ---
 name: Slash Command Dispatch
 on:
@@ -34,16 +32,22 @@ jobs:
     if: github.event.action != 'created'
     runs-on: finn-runners
     steps:
-      - name: Checkout EWA-Actions command router
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
-          repository: EWA-Services/EWA-Actions
-          ref: main
-          path: ewa-actions
-          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
           persist-credentials: false
 
       - name: Dispatch override lifecycle event
         env:
           GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
-        run: python3 ewa-actions/scripts/override_command_dispatch.py
+        run: python3 ci-source/.github/finn-ci/scripts/override_command_dispatch.py

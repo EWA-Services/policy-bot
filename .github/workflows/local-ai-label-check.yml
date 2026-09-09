@@ -1,0 +1,44 @@
+# Reusable AI Label Check workflow.
+---
+name: AI Label Check
+
+on:
+  workflow_call:
+    secrets:
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY:
+        required: false
+
+permissions: {}
+
+jobs:
+  ai-assistance-disclosure:
+    name: AI Label Check
+    runs-on: finn-runners
+    # Reduce duplicate work; the action refetches PR state because run ordering is not guaranteed.
+    concurrency:
+      group: ai-label-check-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Validate AI usage details
+        uses: ./ci-source/.github/finn-ci/.github/actions/ai-assistance-disclosure
+        with:
+          github-token: ${{ github.token }}

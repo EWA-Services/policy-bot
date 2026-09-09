@@ -1,0 +1,49 @@
+---
+name: PR Size Override
+description: Find the deterministic, current authorized override for a pull request.
+
+inputs:
+  github-token:
+    description: GitHub token used to list pull-request issue comments.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  pull-request-number:
+    description: Pull-request number whose current comments are evaluated.
+    required: true
+  approved-users:
+    description: Space-delimited standard-tier approvers.
+    required: true
+  reviewable-loc:
+    description: Reviewable lines in the pull request.
+    required: true
+  reviewable-files:
+    description: Reviewable files in the pull request.
+    required: true
+
+outputs:
+  actor:
+    description: Exact login that granted the override, or empty.
+    value: ${{ steps.evaluate.outputs.actor }}
+  tier:
+    description: Effective override tier (standard or jai), or empty.
+    value: ${{ steps.evaluate.outputs.tier }}
+  comment-url:
+    description: URL of the effective override comment, or empty.
+    value: ${{ steps.evaluate.outputs.comment_url }}
+
+runs:
+  using: composite
+  steps:
+    - id: evaluate
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_SIZE_OVERRIDE_APPROVERS: ${{ inputs.approved-users }}
+        PR_SIZE_REVIEWABLE_FILES: ${{ inputs.reviewable-files }}
+        PR_SIZE_REVIEWABLE_LOC: ${{ inputs.reviewable-loc }}
+      run: >-
+        "${{ github.action_path }}/find-override.sh"
+        "${{ inputs.repository }}"
+        "${{ inputs.pull-request-number }}"

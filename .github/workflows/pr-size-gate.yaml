@@ -1,5 +1,3 @@
-# This workflow file is synchronized from EWA-Services/EWA-Actions
-# Do not modify this file directly, all changes will be lost/overwritten
 ---
 name: PR Size
 run-name: >-
@@ -31,10 +29,25 @@ jobs:
         pr-size-rerun-${{ github.repository }}-${{
         github.event.client_payload.github.payload.issue.number }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: finn-runners
     steps:
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
       - name: Rerun pull-request workflow
-        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-rerun@main
+        uses: ./ci-source/.github/finn-ci/.github/actions/pr-size-rerun
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -50,7 +63,7 @@ jobs:
     concurrency:
       group: pr-size-evaluate-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: finn-runners
     steps:
       - id: pull-request
         name: Resolve pull request
@@ -79,6 +92,21 @@ jobs:
           persist-credentials: false
           ref: ${{ steps.pull-request.outputs.head-sha }}
 
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
       - id: policy
         name: Load trusted review policy
         env:
@@ -93,7 +121,7 @@ jobs:
 
       - id: measure
         name: Measure reviewable diff
-        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-gate@main
+        uses: ./ci-source/.github/finn-ci/.github/actions/pr-size-gate
         with:
           base-sha: ${{ steps.pull-request.outputs.base-sha }}
           head-sha: ${{ steps.pull-request.outputs.head-sha }}
@@ -101,7 +129,7 @@ jobs:
 
       - id: override
         name: Find size override
-        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-override@main
+        uses: ./ci-source/.github/finn-ci/.github/actions/pr-size-override
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -113,7 +141,7 @@ jobs:
       - id: evaluate
         name: Evaluate thresholds
         if: always()
-        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-evaluate@main
+        uses: ./ci-source/.github/finn-ci/.github/actions/pr-size-evaluate
         with:
           mode: ${{ vars.PR_SIZE_MODE || 'enforce' }}
           raw-loc: ${{ steps.measure.outputs.raw-loc }}
@@ -129,7 +157,7 @@ jobs:
       - name: Update PR size comment
         if: always() && steps.evaluate.outputs.configuration-error != 'true'
         continue-on-error: true
-        uses: EWA-Services/EWA-Actions/.github/actions/pr-size-comment@main
+        uses: ./ci-source/.github/finn-ci/.github/actions/pr-size-comment
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}

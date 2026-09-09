@@ -1,5 +1,3 @@
-# This file is synchronized from EWA-Services/EWA-Actions
-# Do not modify this file directly, all changes will be lost/overwritten
 ---
 name: Auto Rebase
 on:
@@ -14,18 +12,33 @@ jobs:
   rebase:
     runs-on: finn-runners
     steps:
-      - name: Setup GPG for signed commits
-        uses: EWA-Services/EWA-Actions/.github/actions/verified-commit@main
-        with:
-          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
-
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           fetch-depth: 0
+
+      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
+      - name: Checkout repository CI helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: >-
+            ${{
+              github.event.pull_request.head.repo.full_name == github.repository &&
+              github.event.pull_request.head.sha ||
+              github.event.pull_request.base.sha || github.sha
+            }}
+          path: ci-source
+          sparse-checkout: .github/finn-ci
+          persist-credentials: false
+
+      - name: Setup GPG for signed commits
+        uses: ./ci-source/.github/finn-ci/.github/actions/verified-commit
+        with:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
 
       - name: Get open PRs
         id: prs

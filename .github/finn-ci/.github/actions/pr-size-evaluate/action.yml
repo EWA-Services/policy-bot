@@ -1,0 +1,74 @@
+---
+name: Evaluate PR Size
+description: Evaluate PR-size thresholds and emit finn-pr-size/v1 telemetry.
+
+inputs:
+  mode:
+    description: Threshold mode. Supported values are warn and enforce.
+    required: false
+    default: warn
+  raw-loc:
+    description: Added and deleted text lines before review exclusions.
+    required: true
+  reviewable-loc:
+    description: Reviewable changed lines.
+    required: true
+  reviewable-files:
+    description: Reviewable changed files.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  pull-request-number:
+    description: Pull-request number being evaluated.
+    required: true
+  head-sha:
+    description: Pull-request head commit SHA.
+    required: true
+  override-actor:
+    description: Exact login granting the override, or empty.
+    required: false
+    default: ""
+  override-tier:
+    description: Override authorization tier, or empty.
+    required: false
+    default: ""
+  override-comment-url:
+    description: URL of the effective override comment, or empty.
+    required: false
+    default: ""
+
+outputs:
+  blocked:
+    description: Whether enforcement mode must fail the PR-size check.
+    value: ${{ steps.evaluate.outputs.blocked }}
+  configuration-error:
+    description: Whether mode, PR metadata, or measurement inputs are invalid.
+    value: ${{ steps.evaluate.outputs.configuration-error }}
+  threshold-result:
+    description: Intrinsic threshold result before override enforcement.
+    value: ${{ steps.evaluate.outputs.threshold-result }}
+  warned:
+    description: Whether the PR exceeds a warning or blocking threshold.
+    value: ${{ steps.evaluate.outputs.warned }}
+  telemetry:
+    description: One-line finn-pr-size/v1 JSON telemetry.
+    value: ${{ steps.evaluate.outputs.telemetry }}
+
+runs:
+  using: composite
+  steps:
+    - id: evaluate
+      shell: bash
+      env:
+        PR_SIZE_HEAD_SHA: ${{ inputs.head-sha }}
+        PR_SIZE_MODE: ${{ inputs.mode }}
+        PR_SIZE_OVERRIDE_ACTOR: ${{ inputs.override-actor }}
+        PR_SIZE_OVERRIDE_COMMENT_URL: ${{ inputs.override-comment-url }}
+        PR_SIZE_OVERRIDE_TIER: ${{ inputs.override-tier }}
+        PR_SIZE_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+        PR_SIZE_RAW_LOC: ${{ inputs.raw-loc }}
+        PR_SIZE_REPOSITORY: ${{ inputs.repository }}
+        PR_SIZE_REVIEWABLE_FILES: ${{ inputs.reviewable-files }}
+        PR_SIZE_REVIEWABLE_LOC: ${{ inputs.reviewable-loc }}
+      run: ${{ github.action_path }}/evaluate.py

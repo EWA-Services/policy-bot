@@ -1,0 +1,61 @@
+---
+name: Configure GPG and Git for Signed Commits
+description: Sets up GPG and Git configuration for signed commits
+author: Florian Kasper
+inputs:
+  GPG_SIGNING_KEY:
+    description: Base64 encoded GPG signing key
+    required: true
+  GPG_PASSPHRASE:
+    description: Passphrase for the GPG key
+    required: true
+  GPG_KEY_ID:
+    description: GPG key ID
+    required: true
+  GIT_USERNAME:
+    description: Name of the Git User
+    required: false
+    default: EWA DevOps
+  GIT_EMAIL:
+    description: E-Mail of the verified User
+    required: false
+    default: devops@ewa-services.com
+runs:
+  using: composite
+  steps:
+    - name: Configure GPG
+      shell: bash
+      env:
+        GPG_SIGNING_KEY: ${{ inputs.GPG_SIGNING_KEY }}
+        GPG_PASSPHRASE: ${{ inputs.GPG_PASSPHRASE }}
+      run: |
+        echo -n "$GPG_SIGNING_KEY" | base64 --decode > gpg.key
+        gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --pinentry-mode loopback --import gpg.key
+        rm gpg.key
+
+        mkdir -p ~/.gnupg
+        cat <<EOF > ~/.gnupg/gpg.conf
+        use-agent
+        EOF
+
+        cat <<EOF > ~/.gnupg/gpg-agent.conf
+        allow-loopback-pinentry
+        EOF
+
+        gpg-connect-agent reloadagent /bye
+
+    - name: Configure GIT
+      shell: bash
+      env:
+        GIT_USERNAME: ${{ inputs.GIT_USERNAME }}
+        GIT_EMAIL: ${{ inputs.GIT_EMAIL }}
+        GPG_KEY_ID: ${{ inputs.GPG_KEY_ID }}
+        GPG_PASSPHRASE: ${{ inputs.GPG_PASSPHRASE }}
+      run: |
+        git config --global user.name "$GIT_USERNAME"
+        git config --global user.email "$GIT_EMAIL"
+        git config --global user.signingkey "$GPG_KEY_ID"
+        git config --global commit.gpgsign true
+        git config --global gpg.program gpg
+        echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 \
+          --pinentry-mode loopback --sign -u "$GPG_KEY_ID" -o /dev/null

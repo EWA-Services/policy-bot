@@ -1,0 +1,210 @@
+---
+name: Evaluate and apply AI review circuit breaker
+description: Evaluate durable review history and pause a non-converging review loop
+
+inputs:
+  repository:
+    description: Repository containing the pull request
+    required: true
+  pr-number:
+    description: Pull request number
+    required: true
+  head-sha:
+    description: Current reviewed head SHA
+    required: true
+  github-token:
+    description: Workflow token used only for deterministic breaker reads
+    required: true
+  analysis-github-token:
+    description: Optional read-only GitHub App token for Codex analysis
+    required: false
+  app-token:
+    description: GitHub App token with checks, issues, and pull-request write access
+    required: true
+  skill-catalog-token:
+    description: Token with read access to EWA-Services/agent-resources
+    required: true
+  codex-auth-json:
+    description: Codex authentication JSON
+    required: true
+  codex-version:
+    description: Codex CLI version
+    required: true
+  codex-model:
+    description: Codex model for review-loop analysis
+    required: true
+  codex-reasoning-effort:
+    description: Codex reasoning effort for review-loop analysis
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate AI review circuit breaker inputs
+      env:
+        PR_NUMBER: ${{ inputs.pr-number }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_breaker_publish.py" validate-inputs \
+          --pr-number "$PR_NUMBER"
+
+    - name: Evaluate AI review circuit breaker
+      id: breaker
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        BREAKER_REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review_breaker.py" \
+          --repo "$BREAKER_REPOSITORY" \
+          --pr-number "$PR_NUMBER" \
+          --output breaker-evaluation.json
+        echo "status=$(jq -r .status breaker-evaluation.json)" >> "$GITHUB_OUTPUT"
+
+    - name: Apply AI review circuit breaker
+      id: pause
+      if: steps.breaker.outputs.status == 'stop'
+      env:
+        GH_TOKEN: ${{ inputs.app-token }}
+        BREAKER_REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        EXPECTED_HEAD_SHA: ${{ inputs.head-sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_breaker_publish.py" pause \
+          --repo "$BREAKER_REPOSITORY" \
+          --pr-number "$PR_NUMBER" \
+          --expected-head "$EXPECTED_HEAD_SHA" \
+          --evaluation breaker-evaluation.json \
+          --external-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:review"
+
+    - name: Checkout reviewed pull request head for breaker analysis
+      id: breaker-checkout
+      if: steps.breaker.outputs.status == 'stop' && inputs.analysis-github-token != ''
+      continue-on-error: true
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.head-sha }}
+        fetch-depth: 0
+        path: .breaker-reviewed-repository
+        token: ${{ inputs.analysis-github-token }}
+        persist-credentials: false
+
+    - name: Checkout review skills for breaker analysis
+      id: breaker-skill-catalog
+      if: steps.breaker.outputs.status == 'stop' && inputs.analysis-github-token != ''
+      continue-on-error: true
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      with:
+        repository: EWA-Services/agent-resources
+        ref: main
+        path: .breaker-agent-resources
+        sparse-checkout: |
+          /skills/finn-pr-review/
+          /skills/finn-coding-standards/
+        sparse-checkout-cone-mode: false
+        token: ${{ inputs.skill-catalog-token }}
+        persist-credentials: false
+
+    - name: Install review skills for breaker analysis
+      id: breaker-skills
+      if: always() && steps.breaker.outputs.status == 'stop' && steps.breaker-skill-catalog.outcome == 'success'
+      continue-on-error: true
+      env:
+        CODEX_HOME: ${{ runner.temp }}/breaker-codex-home
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_skills.py" install \
+          --catalog-root "${GITHUB_WORKSPACE}/.breaker-agent-resources"
+
+    - name: Setup Node for breaker analysis
+      id: breaker-node
+      if: steps.breaker.outputs.status == 'stop' && inputs.analysis-github-token != ''
+      continue-on-error: true
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      with:
+        node-version: "22"
+
+    - name: Setup Ruby for breaker analysis
+      id: breaker-ruby
+      if: steps.breaker.outputs.status == 'stop' && inputs.analysis-github-token != ''
+      continue-on-error: true
+      uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0
+      with:
+        ruby-version: "3.3"
+
+    - name: Setup Go for breaker analysis
+      id: breaker-go
+      if: steps.breaker.outputs.status == 'stop' && inputs.analysis-github-token != ''
+      continue-on-error: true
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      with:
+        go-version: 1.26.x
+
+    - name: Install Codex CLI for breaker analysis
+      id: breaker-codex-install
+      if: always() && steps.breaker.outputs.status == 'stop' && steps.breaker-node.outcome == 'success'
+      continue-on-error: true
+      env:
+        CODEX_VERSION: ${{ inputs.codex-version }}
+      shell: bash
+      run: python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_tooling.py" install-codex
+
+    - name: Configure Codex authentication for breaker analysis
+      id: breaker-codex-auth
+      if: always() && steps.breaker.outputs.status == 'stop' && steps.breaker-codex-install.outcome == 'success'
+      continue-on-error: true
+      env:
+        CODEX_HOME: ${{ runner.temp }}/breaker-codex-home
+        HOME: ${{ runner.temp }}/breaker-home
+        CODEX_AUTH_JSON: ${{ inputs.codex-auth-json }}
+      shell: bash
+      run: python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_codex.py" authenticate
+
+    - name: Analyze stopped AI review loop
+      id: breaker-analysis
+      if: >-
+        always() &&
+        steps.breaker.outputs.status == 'stop' &&
+        steps.breaker-checkout.outcome == 'success' &&
+        steps.breaker-skills.outcome == 'success' &&
+        steps.breaker-ruby.outcome == 'success' &&
+        steps.breaker-go.outcome == 'success' &&
+        steps.breaker-codex-auth.outcome == 'success'
+      continue-on-error: true
+      env:
+        CODEX_HOME: ${{ runner.temp }}/breaker-codex-home
+        HOME: ${{ runner.temp }}/breaker-home
+        CODEX_GITHUB_TOKEN: ${{ inputs.analysis-github-token }}
+        CODEX_MODEL: ${{ inputs.codex-model }}
+        CODEX_REASONING_EFFORT: ${{ inputs.codex-reasoning-effort }}
+        CODEX_COMMENT_LOGIN: finn-ai-coder[bot]
+        GITHUB_REPOSITORY: ${{ inputs.repository }}
+        REVIEW_HEAD_SHA: ${{ inputs.head-sha }}
+        TARGET_PR_NUMBER: ${{ inputs.pr-number }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_codex.py" analyze-breaker
+
+    - name: Post breaker explanation comment
+      if: always() && steps.breaker.outputs.status == 'stop' && steps.pause.outcome == 'success'
+      env:
+        GH_TOKEN: ${{ inputs.app-token }}
+        BREAKER_REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${GITHUB_ACTION_PATH}/../../../scripts/code_review/code_review_breaker_publish.py" post-comment \
+          --repo "$BREAKER_REPOSITORY" \
+          --pr-number "$PR_NUMBER" \
+          --expected-head "${{ inputs.head-sha }}" \
+          --evaluation breaker-evaluation.json \
+          --analysis "${RUNNER_TEMP}/breaker-analysis.json"
