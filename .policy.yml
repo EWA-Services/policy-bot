@@ -8,7 +8,7 @@ policy:
   approval:
     - or:
         - finn-devops bypass no review required
-        - platform engineering or engineering leads team approval
+        - platform engineering or platform leads team approval
     - Jai approval for PR size workflow changes
   disapproval:
     requires:
@@ -48,8 +48,10 @@ approval_rules:
             - Validate PR Title and Description
             - ai-assistance-disclosure / AI Label Check
             - pre-commit-check
-  - name: platform engineering or engineering leads team approval
-    description: Requires 2 approvals from Platform Engineering or Engineering Leads for all PRs to main or prod
+  - name: platform engineering or platform leads team approval
+    description: >-
+      Requires 2 approvals from Platform Engineering or Platform Engineering Leads
+      for all PRs to main or prod
     if:
       targets_branch:
         pattern: ^(main|master|develop|prod)$
@@ -68,12 +70,13 @@ approval_rules:
       invalidate_on_push: false
       request_review:
         enabled: true
-        mode: teams
+        mode: random-users
+        count: 1
     requires:
       count: 2
       teams:
-        - EWA-Services/engineering-leads
         - EWA-Services/engineering-platform
+        - EWA-Services/engineering-platform-leads
       conditions:
         has_valid_signatures: true
         has_status:
