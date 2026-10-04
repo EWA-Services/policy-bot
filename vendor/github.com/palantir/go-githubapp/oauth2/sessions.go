@@ -18,10 +18,10 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 
 	"github.com/alexedwards/scs"
-	"github.com/pkg/errors"
 )
 
 var (
@@ -37,7 +37,7 @@ func (s *SessionStateStore) GenerateState(w http.ResponseWriter, r *http.Request
 
 	b := make([]byte, 20)
 	if _, err := rand.Read(b); err != nil {
-		return "", errors.Wrap(err, "failed to generate state value")
+		return "", fmt.Errorf("failed to generate state value: %w", err)
 	}
 
 	state := hex.EncodeToString(b)
@@ -50,6 +50,10 @@ func (s *SessionStateStore) VerifyState(r *http.Request, expected string) (bool,
 	state, err := sess.GetString(DefaultSessionKey)
 	if err != nil {
 		return false, err
+	}
+
+	if state == "" {
+		return false, nil
 	}
 
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(state)) == 1, nil

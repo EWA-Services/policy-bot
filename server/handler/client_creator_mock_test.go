@@ -17,7 +17,7 @@ package handler
 import (
 	"errors"
 
-	"github.com/google/go-github/v85/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/palantir/go-githubapp/githubapp"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
@@ -33,7 +33,7 @@ type stubClientCreator struct{}
 var _ githubapp.ClientCreator = stubClientCreator{}
 
 func (stubClientCreator) NewAppClient() (*github.Client, error) {
-	return github.NewClient(nil), nil
+	return github.NewClient()
 }
 
 func (stubClientCreator) NewAppV4Client() (*githubv4.Client, error) {
@@ -41,7 +41,7 @@ func (stubClientCreator) NewAppV4Client() (*githubv4.Client, error) {
 }
 
 func (stubClientCreator) NewInstallationClient(_ int64) (*github.Client, error) {
-	return github.NewClient(nil), nil
+	return github.NewClient()
 }
 
 func (stubClientCreator) NewInstallationV4Client(_ int64) (*githubv4.Client, error) {
@@ -49,7 +49,7 @@ func (stubClientCreator) NewInstallationV4Client(_ int64) (*githubv4.Client, err
 }
 
 func (stubClientCreator) NewTokenSourceClient(_ oauth2.TokenSource) (*github.Client, error) {
-	return github.NewClient(nil), nil
+	return github.NewClient()
 }
 
 func (stubClientCreator) NewTokenSourceV4Client(_ oauth2.TokenSource) (*githubv4.Client, error) {
@@ -57,7 +57,7 @@ func (stubClientCreator) NewTokenSourceV4Client(_ oauth2.TokenSource) (*githubv4
 }
 
 func (stubClientCreator) NewTokenClient(_ string) (*github.Client, error) {
-	return github.NewClient(nil), nil
+	return github.NewClient()
 }
 
 func (stubClientCreator) NewTokenV4Client(_ string) (*githubv4.Client, error) {

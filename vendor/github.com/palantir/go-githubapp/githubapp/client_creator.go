@@ -24,9 +24,8 @@ import (
 	"time"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	"github.com/google/go-github/v85/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/gregjones/httpcache"
-	"github.com/pkg/errors"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
 )
@@ -311,14 +310,14 @@ func (c *clientCreator) newClient(base *http.Client, middleware []ClientMiddlewa
 		middleware,
 	})
 
-	baseURL, err := url.Parse(c.v3BaseURL)
+	client, err := github.NewClient(
+		github.WithHTTPClient(base),
+		github.WithURLs(&c.v3BaseURL, nil),
+		github.WithUserAgent(makeUserAgent(c.userAgent, details)),
+	)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to parse base URL: %q", c.v3BaseURL)
+		return nil, fmt.Errorf("failed to create github client: %w", err)
 	}
-
-	client := github.NewClient(base)
-	client.BaseURL = baseURL
-	client.UserAgent = makeUserAgent(c.userAgent, details)
 
 	return client, nil
 }
@@ -332,7 +331,7 @@ func (c *clientCreator) newV4Client(base *http.Client, middleware []ClientMiddle
 
 	v4BaseURL, err := url.Parse(c.v4BaseURL)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to parse base URL: %q", c.v4BaseURL)
+		return nil, fmt.Errorf("failed to parse base URL: %q: %w", c.v4BaseURL, err)
 	}
 
 	client := githubv4.NewEnterpriseClient(v4BaseURL.String(), base)
@@ -383,11 +382,35 @@ func newInstallation(integrationID, installationID int64, privKeyBytes []byte, v
 func cache(cacheFunc func() httpcache.Cache) ClientMiddleware {
 	return func(next http.RoundTripper) http.RoundTripper {
 		return &httpcache.Transport{
-			Transport:           next,
+			Transport:           noStoreServerErrors(next),
 			Cache:               cacheFunc(),
 			MarkCachedResponses: true,
 		}
 	}
+}
+
+func noStoreServerErrors(next http.RoundTripper) http.RoundTripper {
+	return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		resp, err := next.RoundTrip(r)
+		if resp != nil && resp.StatusCode >= 500 && resp.StatusCode < 600 {
+			if resp.Header == nil {
+				resp.Header = make(http.Header)
+			}
+			// Preserve existing Cache-Control directives.
+			cacheControl := resp.Header.Get("Cache-Control")
+			// Don't add a no-store directive if it already exists.
+			for directive := range strings.SplitSeq(cacheControl, ",") {
+				if strings.TrimSpace(directive) == "no-store" {
+					return resp, err
+				}
+			}
+			if cacheControl != "" {
+				cacheControl += ", "
+			}
+			resp.Header.Set("Cache-Control", cacheControl+"no-store")
+		}
+		return resp, err
+	})
 }
 
 func cacheControl(alwaysValidate bool) ClientMiddleware {
