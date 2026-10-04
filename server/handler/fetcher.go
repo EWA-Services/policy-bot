@@ -17,11 +17,10 @@ package handler
 import (
 	"context"
 	"errors"
-	"net/http"
 	"os"
 	"time"
 
-	"github.com/google/go-github/v85/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/palantir/go-githubapp/appconfig"
 	"github.com/palantir/policy-bot/policy"
 	"gopkg.in/yaml.v2"
@@ -122,12 +121,8 @@ func (cf *ConfigFetcher) loadConfigWithRetries(
 }
 
 func isServerError(err error) bool {
-	var ghErr *github.ErrorResponse
-	if errors.As(err, &ghErr) {
-		switch ghErr.Response.StatusCode {
-		case http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-			return true
-		}
+	if ghErr, ok := errors.AsType[*github.ErrorResponse](err); ok {
+		return ghErr.Response.StatusCode >= 500 && ghErr.Response.StatusCode <= 599
 	}
 	return false
 }

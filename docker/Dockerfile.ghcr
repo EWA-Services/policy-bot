@@ -1,4 +1,4 @@
-FROM node:20-bookworm AS frontend
+FROM node:24-bookworm AS frontend
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN yarn install --frozen-lockfile
 COPY . .
 RUN yarn run build:production
 
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27.1-bookworm AS builder
 
 WORKDIR /app
 

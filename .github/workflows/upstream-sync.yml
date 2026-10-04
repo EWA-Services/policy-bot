@@ -6,6 +6,10 @@ on:
     - cron: 0 6 * * *
   workflow_dispatch: {}
 
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -18,19 +22,25 @@ env:
 jobs:
   sync:
     runs-on: finn-runners
+    timeout-minutes: 15
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ env.FORK_BRANCH }}
-          token: ${{ secrets.FINN_DEVOPS_CONTENT_WRITE_PAT }}
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          gpg_private_key: ${{ secrets.FINN_DEVOPS_BOT_GPG_PRIVATE_KEY }}
 
       - name: Add upstream remote and fetch
         run: |
           set -euo pipefail
-          git config user.name "EWA DevOps"
-          git config user.email "devops@ewa-services.com"
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${UPSTREAM_BRANCH}"
 
@@ -62,11 +72,10 @@ jobs:
 
           git checkout -B "${branch}" "origin/${FORK_BRANCH}"
           if ! git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"; then
-            echo "conflicts=true" >> "$GITHUB_OUTPUT"
-            git add -A
-            git commit -m "chore: upstream sync with conflicts (requires manual resolution)"
-          else
-            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Upstream merge failed; resolve manually before syncing."
+            git diff --name-only --diff-filter=U
+            git merge --abort
+            exit 1
           fi
 
       - name: Push sync branch
@@ -83,8 +92,7 @@ jobs:
           BRANCH: ${{ steps.prepare.outputs.branch }}
           SHORT: ${{ steps.prepare.outputs.short }}
           BEHIND: ${{ steps.detect.outputs.behind }}
-          CONFLICTS: ${{ steps.prepare.outputs.conflicts }}
-          GH_TOKEN: ${{ secrets.FINN_DEVOPS_CONTENT_WRITE_PAT }}
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           title="chore: sync upstream policy-bot ${SHORT}"
@@ -100,11 +108,7 @@ jobs:
             echo ""
             echo "- Upstream HEAD: \`${SHORT}\`"
             echo "- Commits behind before merge: \`${BEHIND}\`"
-            if [ "${CONFLICTS}" = "true" ]; then
-              echo "- :warning: Merge had conflicts — conflict markers are committed; resolve manually before merging."
-            else
-              echo "- Clean merge (no conflicts)."
-            fi
+            echo "- Clean merge (no conflicts)."
           } > "${body_file}"
 
           pr_number=$(gh pr list --state open --head "${BRANCH}" --json number --jq '.[0].number // empty')

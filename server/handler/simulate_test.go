@@ -15,13 +15,22 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-github/v92/github"
+	"github.com/palantir/go-githubapp/githubapp"
 	"github.com/palantir/policy-bot/policy/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"goji.io"
+	"goji.io/pat"
 )
 
 func TestNewSimulationResponse(t *testing.T) {
@@ -172,4 +181,99 @@ func TestSimulationResponseJSON(t *testing.T) {
 
 		assert.NotContains(t, fields, "children")
 	})
+}
+
+func TestSimulateRequiresCallerRepositoryAccess(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		tokenStatus     int
+		permission      string
+		wantStatus      int
+		wantAppRequests int
+	}{
+		{"token cannot see repository", http.StatusNotFound, "admin", http.StatusNotFound, 0},
+		{"token lacks repository scope", http.StatusForbidden, "admin", http.StatusNotFound, 0},
+		{"admin can simulate", http.StatusOK, "admin", http.StatusBadRequest, 1},
+		{"maintainer can simulate", http.StatusOK, "maintain", http.StatusBadRequest, 1},
+		{"reader cannot simulate", http.StatusOK, "pull", http.StatusForbidden, 1},
+		{"contributor cannot simulate", http.StatusOK, "push", http.StatusForbidden, 1},
+		{"triage user cannot simulate", http.StatusOK, "triage", http.StatusForbidden, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var appRequests atomic.Int32
+			var callerPullReads atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.Header.Get("Authorization") == "Bearer installation" {
+					appRequests.Add(1)
+				}
+				switch r.URL.Path {
+				case "/user":
+					_, err := fmt.Fprint(w, `{"login":"admin"}`)
+					assert.NoError(t, err)
+				case "/repos/testorg/private/pulls/1":
+					if r.Header.Get("Authorization") == "Bearer caller" {
+						callerPullReads.Add(1)
+						w.WriteHeader(test.tokenStatus)
+						if test.tokenStatus != http.StatusOK {
+							_, err := fmt.Fprint(w, `{"message":"repository access denied"}`)
+							assert.NoError(t, err)
+							return
+						}
+					}
+					_, err := fmt.Fprint(w, `{"number":1,"base":{"repo":{"id":1,"name":"private","owner":{"login":"testorg"}}},"head":{"sha":"abc"}}`)
+					assert.NoError(t, err)
+				case "/repos/testorg/private/collaborators/admin/permission":
+					_, err := fmt.Fprintf(w, `{"user":{"login":"admin","permissions":{"%s":true}}}`, test.permission)
+					assert.NoError(t, err)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer api.Close()
+			apiURL := api.URL + "/"
+			newClient := func(token string) *github.Client {
+				client, err := github.NewClient(github.WithHTTPClient(api.Client()), github.WithURLs(&apiURL, nil), github.WithAuthToken(token))
+				require.NoError(t, err)
+				return client
+			}
+			handler := &Simulate{Base: Base{
+				ClientCreator: simulationAccessClients{tokenClient: newClient("caller"), installationClient: newClient("installation")},
+				Installations: simulationAccessInstallations{},
+			}}
+			mux := goji.NewMux()
+			mux.HandleFunc(pat.Post("/api/simulate/:owner/:repo/:number"), func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, handler.ServeHTTP(w, r))
+			})
+			request := httptest.NewRequest(http.MethodPost, "/api/simulate/testorg/private/1", strings.NewReader("invalid JSON"))
+			request.Header.Set("Authorization", "Bearer caller")
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			assert.Equal(t, test.wantStatus, response.Code)
+			assert.Equal(t, int32(1), callerPullReads.Load())
+			assert.Equal(t, int32(test.wantAppRequests), appRequests.Load())
+		})
+	}
+}
+
+type simulationAccessClients struct {
+	stubClientCreator
+	tokenClient        *github.Client
+	installationClient *github.Client
+}
+
+func (c simulationAccessClients) NewTokenClient(_ string) (*github.Client, error) {
+	return c.tokenClient, nil
+}
+
+func (c simulationAccessClients) NewInstallationClient(_ int64) (*github.Client, error) {
+	return c.installationClient, nil
+}
+
+type simulationAccessInstallations struct {
+	githubapp.InstallationsService
+}
+
+func (simulationAccessInstallations) GetByOwner(_ context.Context, _ string) (githubapp.Installation, error) {
+	return githubapp.Installation{ID: 1}, nil
 }
