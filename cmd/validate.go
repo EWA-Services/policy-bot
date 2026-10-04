@@ -32,7 +32,7 @@ var validateCmdConfig struct {
 var ValidationCmd = &cobra.Command{
 	Use:   "validate",
 	Short: "Validates the syntax and structure of a policy file.",
-	Long:  "Validates the YAML syntax and logical structure of a local policy file. It does not support remote policy references.",
+	Long:  "Validates the YAML syntax and logical structure of a local policy file. For remote references, validates the repository reference without fetching remote content.",
 
 	RunE: validationCmd,
 }
@@ -47,8 +47,12 @@ func validationCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	remoteRef, err := appconfig.YAMLRemoteRefParser("", policyData)
-	if err == nil && remoteRef != nil {
-		return nil
+	if err != nil {
+		return errors.Wrap(err, "failed to parse remote policy reference")
+	}
+	if remoteRef != nil {
+		_, _, err := remoteRef.SplitRemote()
+		return errors.Wrap(err, "failed to parse remote policy reference")
 	}
 
 	var policyConfig policy.Config

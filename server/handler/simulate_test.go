@@ -187,12 +187,17 @@ func TestSimulateRequiresCallerRepositoryAccess(t *testing.T) {
 	for _, test := range []struct {
 		name            string
 		tokenStatus     int
+		permission      string
 		wantStatus      int
 		wantAppRequests int
 	}{
-		{"token cannot see repository", http.StatusNotFound, http.StatusNotFound, 0},
-		{"token lacks repository scope", http.StatusForbidden, http.StatusNotFound, 0},
-		{"authorized token reaches simulation", http.StatusOK, http.StatusBadRequest, 1},
+		{"token cannot see repository", http.StatusNotFound, "admin", http.StatusNotFound, 0},
+		{"token lacks repository scope", http.StatusForbidden, "admin", http.StatusNotFound, 0},
+		{"admin can simulate", http.StatusOK, "admin", http.StatusBadRequest, 1},
+		{"maintainer can simulate", http.StatusOK, "maintain", http.StatusBadRequest, 1},
+		{"reader cannot simulate", http.StatusOK, "pull", http.StatusForbidden, 1},
+		{"contributor cannot simulate", http.StatusOK, "push", http.StatusForbidden, 1},
+		{"triage user cannot simulate", http.StatusOK, "triage", http.StatusForbidden, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var appRequests atomic.Int32
@@ -219,7 +224,7 @@ func TestSimulateRequiresCallerRepositoryAccess(t *testing.T) {
 					_, err := fmt.Fprint(w, `{"number":1,"base":{"repo":{"id":1,"name":"private","owner":{"login":"testorg"}}},"head":{"sha":"abc"}}`)
 					assert.NoError(t, err)
 				case "/repos/testorg/private/collaborators/admin/permission":
-					_, err := fmt.Fprint(w, `{"permission":"admin","user":{"login":"admin","permissions":{"admin":true}}}`)
+					_, err := fmt.Fprintf(w, `{"user":{"login":"admin","permissions":{"%s":true}}}`, test.permission)
 					assert.NoError(t, err)
 				default:
 					http.NotFound(w, r)
