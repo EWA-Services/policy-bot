@@ -50,7 +50,7 @@ approval_rules:
             - pre-commit-check
   - name: platform engineering or platform leads team approval
     description: >-
-      Requires 2 approvals from Platform Engineering or Platform Engineering Leads
+      Requires 1 approval from Platform Engineering or Platform Engineering Leads
       for all PRs to main or prod
     if:
       targets_branch:
@@ -73,7 +73,7 @@ approval_rules:
         mode: random-users
         count: 1
     requires:
-      count: 2
+      count: 1
       teams:
         - EWA-Services/engineering-platform
         - EWA-Services/engineering-platform-leads
