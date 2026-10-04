@@ -10,12 +10,14 @@ repos:
       - id: check-yaml
       - id: check-json
       - id: end-of-file-fixer
+        exclude: ^vendor/
 
   # YAML linting
   - repo: https://github.com/adrienverge/yamllint.git
     rev: v1.37.1
     hooks:
       - id: yamllint
+        exclude: ^vendor/
 
   # GitGuardian secret scanning
   - repo: https://github.com/gitguardian/ggshield

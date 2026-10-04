@@ -1,18 +1,19 @@
+---
 version: 2
 
 updates:
   - package-ecosystem: github-actions
     directory: /
-    labels: ["no changelog", "merge when ready", "dependencies", "github_actions"]
+    labels: [no changelog, merge when ready, dependencies, github_actions]
     schedule:
       interval: weekly
     groups:
       codeql:
         patterns:
-          - "github/codeql-action*"
+          - github/codeql-action*
 
   - package-ecosystem: npm
     directory: /
-    labels: ["no changelog", "merge when ready", "dependencies", "javascript"]
+    labels: [no changelog, merge when ready, dependencies, javascript]
     schedule:
       interval: monthly

@@ -67,6 +67,22 @@ func (h *Simulate) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 		return writeAPIError(w, http.StatusBadRequest, "failed to parse pull request parameters from request")
 	}
 
+	tokenClient, err := h.NewTokenClient(getToken(r))
+	if err != nil {
+		return errors.Wrap(err, "failed to create token client")
+	}
+
+	// The caller's token must cover this repository even when the app can access it.
+	pr, _, err := tokenClient.PullRequests.Get(ctx, owner, repo, number)
+	if err != nil {
+		if rerr, ok := stderrors.AsType[*github.ErrorResponse](err); ok {
+			if rerr.Response.StatusCode == http.StatusNotFound || rerr.Response.StatusCode == http.StatusForbidden {
+				return writeAPI404Error(w)
+			}
+		}
+		return errors.Wrap(err, "failed to get pull request")
+	}
+
 	installation, err := h.Installations.GetByOwner(ctx, owner)
 	if err != nil {
 		return writeAPI404Error(w)
@@ -75,14 +91,6 @@ func (h *Simulate) ServeHTTP(w http.ResponseWriter, r *http.Request) error {
 	client, err := h.NewInstallationClient(installation.ID)
 	if err != nil {
 		return err
-	}
-
-	pr, _, err := client.PullRequests.Get(ctx, owner, repo, number)
-	if err != nil {
-		if isNotFound(err) {
-			return writeAPI404Error(w)
-		}
-		return errors.Wrap(err, "failed to get pull request")
 	}
 
 	permission, err := getUserSimulatePermission(ctx, client, owner, repo, username)

@@ -1,6 +1,7 @@
+---
 plugins:
   resolvers:
-    - https://github.com/{{index GroupParts 1}}/{{index GroupParts 2}}/releases/download/v{{Version}}/{{Product}}-{{Version}}-{{OS}}-{{Arch}}.tgz
+    - https://github.com/{{index GroupParts 1}}/{{index GroupParts 2}}/releases/download/v{{Version}}/{{Product}}-{{Version}}-{{OS}}-{{Arch}}.tgz  # yamllint disable-line rule:line-length
   plugins:
     - locator:
         id: com.palantir.godel-mod-plugin:mod-plugin:1.61.0
@@ -11,7 +12,7 @@ plugins:
           linux-arm64: ad6ad0ddfb797f1a9cc473407ebc6356636ea9e6a432139395e10142fcc6f1ba
 environment:
   GO111MODULE: "on"
-  GOFLAGS: "-mod=vendor"
+  GOFLAGS: -mod=vendor
 exclude:
   names:
     - \..+
