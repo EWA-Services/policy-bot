@@ -1,0 +1,20 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+---
+name: Review Assignment
+
+on:
+  status: {}
+
+permissions: {}
+
+jobs:
+  review_assignment:
+    permissions:
+      pull-requests: write
+    uses: EWA-Services/EWA-Actions/.github/workflows/shareable-review-assignment.yaml@main
+    with:
+      capability_team: engineering-platform
+      approval_branch_pattern: ^(main|master|develop|prod)$
+    secrets:
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
