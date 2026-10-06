@@ -1,8 +1,25 @@
 # This file is synchronized from EWA-Services/EWA-Actions
-# Do not modify this file directly, all changes will be lost/overwritten
+# Do not modify this file directly, all changes will be lost/overwritten.
 
-# This file defines ownership of code in the repository
-# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
-
-# Default owners for everything in the repo
-* @EWA-Services/dev-infrastructure
+# ════════════════════════════════════════════════════════════════════
+# DO NOT ADD CODE-OWNERS RULES HERE.
+# ════════════════════════════════════════════════════════════════════
+#
+# Review enforcement for this repository is owned by policy-bot, not
+# GitHub CODEOWNERS. See `.policy.yml` in this repo and the runbook
+# at https://www.notion.so/24b032aabccd803c9e54d0ffeeefa286
+#
+# A `<path> @team` rule below would re-introduce the problem we just
+# fixed in ENG-1044: GitHub's CODEOWNERS auto-request would fire on
+# every PR matching that path, including finn-devops sync PRs and
+# dependabot PRs that policy-bot's `title.not_matches` exclusion was
+# explicitly added to silence. Round-robin team review assignment
+# then expands one team request into two individual notifications
+# per PR, multiplied across 17+ policy-bot-protected repos.
+#
+# If you need path-specific human review for a particular directory,
+# raise a Linear ticket (Engineering team) so the corresponding
+# policy-bot `approval_rule` can be added with the right `if:`
+# scoping (changed_files / only_changed_files predicates).
+#
+# See: https://linear.app/finnapp/issue/ENG-1044
