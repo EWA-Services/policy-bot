@@ -8,7 +8,7 @@ policy:
   approval:
     - or:
         - finn-devops bypass no review required
-        - platform engineering or platform leads team approval
+        - platform approver approval
     - Jai approval for PR size workflow changes
   disapproval:
     requires:
@@ -48,16 +48,14 @@ approval_rules:
             - Validate PR Title and Description
             - ai-assistance-disclosure / AI Label Check
             - pre-commit-check
-  - name: platform engineering or platform leads team approval
-    description: >-
-      Requires 1 approval from Platform Engineering or Platform Engineering Leads
-      for all PRs to main or prod
+  - name: platform approver approval
+    description: Require one platform approver for pull requests to protected branches
     if:
       targets_branch:
         pattern: ^(main|master|develop|prod)$
       # Skip this rule (and its request_review) for finn-devops automation PRs.
       # The finn-devops bypass rule above already satisfies the `or` policy
-      # for these PRs; matching here too would needlessly tag the human team
+      # for these PRs; matching here too would needlessly tag a human approver
       # on every sync/chore/release PR.
       title:
         not_matches:
@@ -74,9 +72,7 @@ approval_rules:
         count: 1
     requires:
       count: 1
-      teams:
-        - EWA-Services/engineering-platform
-        - EWA-Services/engineering-platform-leads
+      users: [jai, poom, Sunn-y-Arora, flkas]
       conditions:
         has_valid_signatures: true
         has_status:
