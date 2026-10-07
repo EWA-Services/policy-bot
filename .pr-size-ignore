@@ -39,6 +39,10 @@ _ide_helper.php
 _ide_helper_models.php
 .phpstorm.meta.php
 
+# swagger-autogen output. Regenerate it from source; do not hand-edit.
+**/swagger-output.json
+**/swaggerOutput.json
+
 # Test snapshots, state, locale files, and generated documentation.
 **/__snapshots__/**
 *.snap
