@@ -1,3 +1,9 @@
+# This file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
+#
+# Public fork copy of repository-slash-command-dispatch.yaml. Jobs use GitHub-hosted
+# runners, and edited or deleted command comments are routed only when their author
+# has write access: any GitHub user can comment on a public repository.
 ---
 name: Slash Command Dispatch
 on:
@@ -11,7 +17,7 @@ permissions:
 jobs:
   slashCommandDispatch:
     if: github.event.action == 'created'
-    runs-on: finn-runners
+    runs-on: ubuntu-latest
     steps:
       - name: Slash Command Dispatch
         uses: peter-evans/slash-command-dispatch@9bdcd7914ec1b75590b790b844aa3b8eee7c683a  # v5.0.2
@@ -20,6 +26,7 @@ jobs:
           commands: |
             ai-review-breaker-reset
             ai-review-override
+            full-review
             growthbook-override
             no-experiment
             pr-size-override
@@ -30,24 +37,39 @@ jobs:
 
   overrideLifecycleDispatch:
     if: github.event.action != 'created'
-    runs-on: finn-runners
+    runs-on: ubuntu-latest
     steps:
-      # Fork PRs use base-owned helpers; same-repository branches can validate helper changes.
-      - name: Checkout repository CI helpers
+      # A deleted or edited override comment starts a full AI review. Only a comment
+      # author with write access may start one, as Slash Command Dispatch requires.
+      - name: Check comment author access
+        id: access
+        env:
+          GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          endpoint="repos/${GITHUB_REPOSITORY}/collaborators/${COMMENT_AUTHOR}/permission"
+          permission="$(gh api "$endpoint" --jq .permission)"
+          case "$permission" in
+            admin|maintain|write) echo "allowed=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "allowed=false" >> "$GITHUB_OUTPUT"
+              echo "The comment author has no write access; no override lifecycle event is routed."
+              ;;
+          esac
+
+      - name: Checkout EWA-Actions command router
+        if: steps.access.outputs.allowed == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
-          repository: ${{ github.repository }}
-          ref: >-
-            ${{
-              github.event.pull_request.head.repo.full_name == github.repository &&
-              github.event.pull_request.head.sha ||
-              github.event.pull_request.base.sha || github.sha
-            }}
-          path: ci-source
-          sparse-checkout: .github/finn-ci
+          repository: EWA-Services/EWA-Actions
+          ref: main
+          path: ewa-actions
+          token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           persist-credentials: false
 
       - name: Dispatch override lifecycle event
+        if: steps.access.outputs.allowed == 'true'
         env:
           GH_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
-        run: python3 ci-source/.github/finn-ci/scripts/override_command_dispatch.py
+        run: python3 ewa-actions/scripts/override_command_dispatch.py
