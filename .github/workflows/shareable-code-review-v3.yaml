@@ -1,0 +1,144 @@
+# Public fork repositories receive byte-for-byte copies of this file through
+# sync/bundles/workflow-public-fork-code-review.yml. Edit the source in
+# EWA-Services/EWA-Actions; edits made in a fork copy are overwritten.
+---
+name: Code Review V3 Claude
+
+on:
+  workflow_call:
+    inputs:
+      review_version:
+        description: Claude review version to run (3, 4, or 5)
+        required: false
+        default: "3"
+        type: string
+      actions_ref:
+        description: EWA-Actions ref to check out for CI helper scripts
+        required: false
+        default: main
+        type: string
+      runner:
+        description: Runner label for review jobs; public repositories need a GitHub-hosted runner
+        required: false
+        default: finn-runners
+        type: string
+      pr_number:
+        description: Pull request number to review
+        required: false
+        default: ""
+        type: string
+      comment_body:
+        description: Exact slash command forwarded by repository dispatch
+        required: false
+        default: ""
+        type: string
+      comment_author:
+        description: Actor forwarded by repository dispatch
+        required: false
+        default: manual-dispatch
+        type: string
+      comment_id:
+        description: Slash-command comment identifier
+        required: false
+        default: ""
+        type: string
+      ai_review_override_approvers:
+        description: GitHub logins allowed to override AI review
+        required: false
+        default: jai
+        type: string
+      dispatch_command:
+        description: Command name forwarded by Slash Command Dispatch
+        required: false
+        default: ""
+        type: string
+      dispatch_issue_state:
+        description: Pull-request state forwarded by Slash Command Dispatch
+        required: false
+        default: ""
+        type: string
+      dispatch_event_action:
+        description: Comment action forwarded by Slash Command Dispatch
+        required: false
+        default: ""
+        type: string
+      dispatch_previous_body:
+        description: Previous comment body forwarded for edit events
+        required: false
+        default: ""
+        type: string
+      codex_version:
+        description: Codex CLI version for circuit-breaker explanations
+        required: false
+        default: latest
+        type: string
+      codex_model:
+        description: Codex model for circuit-breaker explanations
+        required: false
+        default: gpt-6-astra
+        type: string
+      codex_reasoning_effort:
+        description: Codex reasoning effort for circuit-breaker explanations
+        required: false
+        default: high
+        type: string
+    secrets:
+      FINN_DEVOPS_PERSONAL_ACCESS_TOKEN:
+        required: true
+      LINEAR_API_KEY:
+        required: false
+      TYPESAFE_API_KEY:
+        required: false
+      CODEX_AUTH_JSON:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN_2:
+        required: false
+      CODEX_AUTH_ALERT_WEBHOOK_URL:
+        required: false
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY:
+        required: false
+      AI_REVIEW_TELEMETRY_SUPABASE_URL:
+        required: false
+      AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY:
+        required: false
+
+permissions: {}
+
+jobs:
+  review:
+    uses: ./.github/workflows/shareable-code-review-pipeline.yaml
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      pull-requests: write
+    with:
+      review_version: ${{ inputs.review_version }}
+      review_engine: claude
+      actions_ref: ${{ inputs.actions_ref }}
+      runner: ${{ inputs.runner }}
+      pr_number: ${{ inputs.pr_number }}
+      comment_body: ${{ inputs.comment_body }}
+      comment_author: ${{ inputs.comment_author }}
+      comment_id: ${{ inputs.comment_id }}
+      ai_review_override_approvers: ${{ inputs.ai_review_override_approvers }}
+      dispatch_command: ${{ inputs.dispatch_command }}
+      dispatch_issue_state: ${{ inputs.dispatch_issue_state }}
+      dispatch_event_action: ${{ inputs.dispatch_event_action }}
+      dispatch_previous_body: ${{ inputs.dispatch_previous_body }}
+      codex_version: ${{ inputs.codex_version }}
+      codex_model: ${{ inputs.codex_model }}
+      codex_reasoning_effort: ${{ inputs.codex_reasoning_effort }}
+    secrets:
+      FINN_DEVOPS_PERSONAL_ACCESS_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
+      CODEX_AUTH_ALERT_WEBHOOK_URL: ${{ secrets.CODEX_AUTH_ALERT_WEBHOOK_URL }}
+      FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+      AI_REVIEW_TELEMETRY_SUPABASE_URL: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_URL }}
+      AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY }}

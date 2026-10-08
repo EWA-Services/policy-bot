@@ -1,13 +1,19 @@
+# This workflow file is synchronized from EWA-Services/EWA-Actions
+# Do not modify this file directly, all changes will be lost/overwritten
 #
 # yamllint disable rule:line-length
 ---
 name: Code Review
 
+# Comment events are not triggers here: any GitHub user can comment on a public
+# repository. /review and /full-review arrive as a repository_dispatch sent by
+# finn-devops after Slash Command Dispatch confirms the commenter has write access.
 on:
   repository_dispatch:
     types:
       - ai-review-breaker-reset-command
       - ai-review-override-command
+      - full-review-command
       - review-command
   pull_request:
     types:
@@ -29,23 +35,30 @@ on:
       codex_model:
         description: Codex model to use for direct CLI runs
         required: true
-        default: gpt-5.6-sol
+        default: gpt-6-astra
         type: string
       codex_reasoning_effort:
         description: Codex reasoning effort for direct CLI runs (none|low|medium|high|xhigh)
         required: true
-        default: xhigh
+        default: high
         type: string
 
 permissions: {}
 
 jobs:
   code-review:
+    # Pull requests from outside forks get no secrets, so they skip. The shared
+    # pipeline also refuses them on /review: its reviewers run a shell in the
+    # pull request checkout on a runner that holds the job's secrets.
     if: >-
-      github.event_name != 'repository_dispatch' ||
-      (github.actor == 'finn-devops' &&
-      github.event.client_payload.github.payload.issue.state == 'open')
-    uses: ./.github/workflows/local-code-review.yaml
+      (github.event_name != 'repository_dispatch' ||
+        (github.actor == 'finn-devops' &&
+        github.event.client_payload.github.payload.issue.state == 'open')) &&
+      (github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository)
+    # Public repositories cannot call reusable workflows in the private EWA-Actions
+    # repository, so the shared review workflows are synchronized next to this file.
+    uses: ./.github/workflows/shareable-code-review.yaml
     permissions:
       actions: write
       checks: read
@@ -53,6 +66,9 @@ jobs:
       issues: write
       pull-requests: write
     with:
+      actions_ref: main
+      # GitHub-hosted runners keep public repository jobs off the organization's self-hosted runners.
+      runner: ubuntu-latest
       pr_number: >-
         ${{ github.event.client_payload.github.payload.issue.number ||
             inputs.pr_number || '' }}
@@ -66,8 +82,8 @@ jobs:
       ai_review_override_approvers: >-
         ${{ vars.AI_REVIEW_OVERRIDE_APPROVERS || 'jai' }}
       codex_version: ${{ inputs.codex_version || 'latest' }}
-      codex_model: ${{ inputs.codex_model || 'gpt-5.6-sol' }}
-      codex_reasoning_effort: ${{ inputs.codex_reasoning_effort || 'xhigh' }}
+      codex_model: ${{ inputs.codex_model || 'gpt-6-astra' }}
+      codex_reasoning_effort: ${{ inputs.codex_reasoning_effort || 'high' }}
       dispatch_command: >-
         ${{ github.event.client_payload.slash_command.command || '' }}
       dispatch_issue_state: >-
@@ -77,8 +93,14 @@ jobs:
       dispatch_previous_body: >-
         ${{ github.event.client_payload.github.payload.changes.body.from || '' }}
     secrets:
+      AI_REVIEW_TELEMETRY_SUPABASE_URL: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_URL }}
+      AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY }}
       FINN_DEVOPS_PERSONAL_ACCESS_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
       CODEX_AUTH_ALERT_WEBHOOK_URL: ${{ secrets.CODEX_AUTH_ALERT_WEBHOOK_URL }}
       FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
 # yamllint enable rule:line-length
