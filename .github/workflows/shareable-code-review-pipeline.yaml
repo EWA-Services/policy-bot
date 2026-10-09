@@ -430,9 +430,14 @@ jobs:
       telemetry: ${{ steps.telemetry.outputs.telemetry }}
       progress_state: ${{ steps.codex-run.outputs.progress_state || needs.ai-review-check-start.outputs.progress_state }}
       review_mode: ${{ steps.v5-prepare.outputs.review_mode }}
-      # "stopped" when the PR got a new commit during the review; the review then has no result to publish.
+      # Versions 2 to 4: "stopped" when the PR got a new commit during the review; the review then has no result
+      # to publish. A version 5 review runs to the end, and its result is published for the reviewed commit.
       review_status: ${{ steps.codex-run.outputs.status }}
       open_must_fix_count: ${{ steps.v5-prepare.outputs.open_must_fix_count }}
+      # The newest decisive review when this review started (0: none). The publisher publishes a version 5 result
+      # for a commit that is no longer the head only when no decisive review (approved or changes requested) was
+      # published since.
+      baseline_review_id: ${{ steps.v5-prepare.outputs.baseline_review_id }}
       # Later jobs trust the version 5 files only by these hashes: the reviewers run with a shell on this runner.
       increment_sha256: ${{ steps.v5-prepare.outputs.increment_sha256 }}
       open_findings_sha256: ${{ steps.v5-prepare.outputs.open_findings_sha256 }}
@@ -923,7 +928,7 @@ jobs:
           AI_REVIEW_VERSION: ${{ needs.resolve-context.outputs.review_version }}
           PROGRESS_COMMENT_ID: ${{ needs.ai-review-check-start.outputs.progress_comment_id }}
           PROGRESS_STATE: ${{ steps.judge-running-progress.outputs.progress_state || needs.codex-direct-cli.outputs.progress_state }}
-          # The judge reports "stopped" when the PR got a new commit before or while it ran.
+          # Versions 2 to 4: the judge reports "stopped" when the PR got a new commit before or while it ran.
           PROGRESS_UPDATES: ${{ format('{{"judge":"{0}"}}', steps.admission.outputs.status == 'success' && 'done' || steps.admission.outputs.status == 'stopped' && 'cancelled' || 'failed') }}
         run: python3 .ewa-actions-shadow-helper/scripts/code_review/code_review_progress.py
 
@@ -971,8 +976,10 @@ jobs:
       JEV_ENABLED: ${{ secrets.TYPESAFE_API_KEY != '' && needs.resolve-context.outputs.review_version != '1' }}
       INCREMENT_SHA256: ${{ needs.codex-direct-cli.outputs.increment_sha256 }}
       OPEN_FINDINGS_SHA256: ${{ needs.codex-direct-cli.outputs.open_findings_sha256 }}
-      # The reviewer or the judge stopped because the PR got a new commit: publish nothing and do not fail the run.
-      # From version 4, "Complete the check of a review without a result" cancels the reviewed head's check.
+      BASELINE_REVIEW_ID: ${{ needs.codex-direct-cli.outputs.baseline_review_id }}
+      # Versions 2 to 4: the reviewer or the judge stopped because the PR got a new commit: publish nothing and do
+      # not fail the run. In version 4, "Complete the check of a review without a result" cancels the reviewed
+      # head's check. A version 5 review never stops for a new commit.
       REVIEW_STOPPED: >-
         ${{ needs.codex-direct-cli.outputs.review_status == 'stopped' || needs.shadow-admission.outputs.status == 'stopped' }}
     steps:
@@ -1142,6 +1149,7 @@ jobs:
             --review-version "$AI_REVIEW_VERSION" \
             --earlier-findings-file "$EARLIER_FINDINGS_FILE" \
             --moved-findings-base64 "$MOVED_FINDINGS_BASE64" \
+            --baseline-review-id "$BASELINE_REVIEW_ID" \
             --title "$TITLE" \
             --summary "$SUMMARY" \
             --model "$PUBLISHED_MODEL" \
@@ -1249,6 +1257,10 @@ jobs:
           PROGRESS_STATE: ${{ steps.jev-running-progress.outputs.progress_state || needs.shadow-admission.outputs.progress_state || needs.codex-direct-cli.outputs.progress_state }}
           PROGRESS_UPDATES: ${{ format('{{"jev":"{0}"}}', steps.jev.outcome == 'success' && 'done' || steps.jev.outcome == 'failure' && 'failed' || 'skipped') }}
           PROGRESS_JEV_REPORT: ${{ steps.jev.outcome == 'success' && format('{0}/review-scope/jev-scope.json', runner.temp) || '' }}
+          # A version 5 result for a commit that is no longer the head: the comment names the reviewed commit, or
+          # says why the result was not published.
+          PROGRESS_REVIEWED_COMMIT: ${{ steps.publish.outputs.newer_head != '' && steps.publish.outputs.head_sha || '' }}
+          PROGRESS_STALE_REASON: ${{ steps.publish.outputs.stale_reason }}
           PROGRESS_OUTCOME: ${{ ((env.REVIEW_STOPPED == 'true' || steps.publish.outputs.action == 'stale' || steps.verdict.outputs.final_verdict == 'skipped' || needs.codex-direct-cli.result == 'cancelled' || needs.shadow-admission.result == 'cancelled') && 'skipped') || steps.publish.outputs.final_verdict || 'error' }}
         run: python3 ewa-actions/scripts/code_review/code_review_progress.py
 
@@ -1280,8 +1292,9 @@ jobs:
           --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
           --attempt "$GITHUB_RUN_ATTEMPT" --output "$RUNNER_TEMP/review-telemetry.json" --write
 
+      # A result for a commit that is no longer the head changes nothing for the new head, so its gate is not rerun.
       - name: Rerun PR metadata gate for published review
-        if: steps.publish.outputs.action == 'published'
+        if: steps.publish.outputs.action == 'published' && steps.publish.outputs.newer_head == ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PUBLISHED_HEAD_SHA: ${{ steps.publish.outputs.head_sha }}
@@ -1323,9 +1336,11 @@ jobs:
           codex-model: ${{ inputs.review_engine == 'claude' && inputs.codex_model || needs.resolve-context.outputs.codex_model }}
           codex-reasoning-effort: ${{ inputs.review_engine == 'claude' && inputs.codex_reasoning_effort || needs.resolve-context.outputs.codex_reasoning_effort }}
 
-      # A stale AI review result (the PR's head or diff moved after the review read it: a new commit or a base change)
-      # is discarded like a stopped review, not failed: the moved PR waits for its own review. A human override that
-      # could not be applied for the same reason still fails, so that its author sees it.
+      # A stale AI review result is discarded like a stopped review, not failed: the moved PR waits for its own
+      # review. In versions 2 to 4 a result is stale when the PR's head or diff moved after the review read it (a
+      # new commit or a base change). A version 5 result is published for the reviewed commit after a new commit;
+      # it is stale only when it cannot be placed or trusted (see code_review_reviewed_commit.py). A human override
+      # that could not be applied because the head or diff moved still fails, so that its author sees it.
       - name: Fail workflow when AI review is not approved
         if: >-
           ${{
