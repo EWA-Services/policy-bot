@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.43.0-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.42.0-finn.1...v1.43.0-finn.1) (2026-10-09)
+
+
+### Features
+
+* **policy:** request one approver and one capability reviewer [ENG-3035] ([#992](https://github.com/EWA-Services/policy-bot/issues/992)) ([#45](https://github.com/EWA-Services/policy-bot/issues/45)) ([29e0bb6](https://github.com/EWA-Services/policy-bot/commit/29e0bb63859b543a2b0c87b94975a7e337e8d817))
+
+
+### Bug Fixes
+
+* Sync upstream and keep FINN changes [ENG-3005] ([#42](https://github.com/EWA-Services/policy-bot/issues/42)) ([18b67f8](https://github.com/EWA-Services/policy-bot/commit/18b67f8888dbf5a6dec5829b4127757b36381a7d))
+
 ## [1.42.0-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.41.3-finn.1...v1.42.0-finn.1) (2026-08-24)
 
 
