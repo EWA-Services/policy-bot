@@ -9,14 +9,14 @@ policy:
     - or:
         - finn-devops bypass no review required
         - platform approver approval
-    - Jai approval for PR size workflow changes
+    - Jai or Poom approval for PR size workflow changes
   disapproval:
     requires:
       organizations: [EWA-Services]
 
 approval_rules:
-  - name: Jai approval for PR size workflow changes
-    description: Require Jai to approve changes to the PR size enforcement workflow
+  - name: Jai or Poom approval for PR size workflow changes
+    description: Require Jai or Poom to approve changes to the PR size enforcement workflow
     if:
       changed_files:
         paths:
@@ -26,7 +26,7 @@ approval_rules:
       invalidate_on_push: true
     requires:
       count: 1
-      users: [jai]
+      users: [jai, poom]
 
   - name: finn-devops bypass no review required
     description: Allow finn-devops to bypass review requirements
