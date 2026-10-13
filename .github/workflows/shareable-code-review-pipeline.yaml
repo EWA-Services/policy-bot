@@ -127,7 +127,7 @@ jobs:
     name: Welcome message
     runs-on: ${{ inputs.runner }}
     if: >-
-      inputs.review_engine != 'claude' && github.event_name == 'pull_request' &&
+      github.event_name == 'pull_request' &&
       (github.event.action == 'opened' || github.event.action == 'reopened')
     permissions:
       contents: read
@@ -159,7 +159,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --body "$(cat <<'EOF'
           🤖 **Code Review Assistant**
 
-          AI-powered reviews use **GPT-6 Astra** with `high` reasoning and the canonical `finn-pr-review` skill.
+          AI-powered reviews use the repository's configured AI reviewer and the canonical `finn-pr-review` skill.
 
           **How to trigger a review:**
           - Comment `/review` for a full PR inspection, with optional context after the command
