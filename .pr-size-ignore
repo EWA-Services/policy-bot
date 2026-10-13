@@ -9,6 +9,8 @@ composer.lock
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+bun.lock
+bun.lockb
 poetry.lock
 Pipfile.lock
 uv.lock
