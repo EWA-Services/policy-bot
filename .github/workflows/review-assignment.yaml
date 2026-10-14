@@ -18,3 +18,4 @@ jobs:
       approval_branch_pattern: ^(main|master|develop|prod)$
     secrets:
       FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+      FINN_DEVOPS_PERSONAL_ACCESS_TOKEN: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
