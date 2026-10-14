@@ -16,8 +16,12 @@ merge:
 
   delete_after_merge: true
 
-  # Must be true for repositories protected by GitHub Rulesets
-  # Bulldozer sees ruleset-protected repos as having "no checks"
-  # Without this, Bulldozer will refuse to merge PRs in those repos
-  # Related: https://github.com/palantir/bulldozer/issues/617
-  allow_merge_with_no_checks: true
+  # Our EWA-Services/bulldozer fork reads GitHub Rulesets natively, so the
+  # blind-merge fallback for ruleset-protected repos is no longer needed.
+  # Upstream issue: https://github.com/palantir/bulldozer/issues/617
+  allow_merge_with_no_checks: false
+
+# Auto Rebase is off org-wide; bulldozer merges main into behind automerge PRs (GitHub signs these merge commits).
+update:
+  trigger:
+    labels: [automerge]
