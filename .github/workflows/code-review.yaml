@@ -4,6 +4,10 @@
 # yamllint disable rule:line-length
 ---
 name: Code Review
+run-name: >-
+  Code Review / PR #${{ github.event.pull_request.number ||
+  github.event.client_payload.github.payload.issue.number ||
+  inputs.pr_number }} [finn-review-telemetry-v1]
 
 # Comment events are not triggers here: any GitHub user can comment on a public
 # repository. /review and /full-review arrive as a repository_dispatch sent by
@@ -70,7 +74,8 @@ jobs:
       # GitHub-hosted runners keep public repository jobs off the organization's self-hosted runners.
       runner: ubuntu-latest
       pr_number: >-
-        ${{ github.event.client_payload.github.payload.issue.number ||
+        ${{ github.event.pull_request.number ||
+            github.event.client_payload.github.payload.issue.number ||
             inputs.pr_number || '' }}
       comment_body: >-
         ${{ github.event.client_payload.github.payload.comment.body || '' }}
