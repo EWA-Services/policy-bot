@@ -29,6 +29,8 @@ type CheckRun struct {
 	Base
 }
 
+type checkRunEvaluator func(context.Context, int64, common.Trigger, pull.Locator) error
+
 func (h *CheckRun) Handles() []string { return []string{"check_run"} }
 
 func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, payload []byte) error {
@@ -36,8 +38,13 @@ func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, pay
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return errors.Wrap(err, "failed to parse check_run event payload")
 	}
+	return h.processEvent(ctx, event, h.Evaluate)
+}
 
-	if event.GetAction() != "completed" || event.GetCheckRun().GetConclusion() != "success" {
+func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent, evaluate checkRunEvaluator) error {
+	switch event.GetAction() {
+	case "created", "completed":
+	default:
 		return nil
 	}
 
@@ -53,8 +60,30 @@ func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, pay
 
 	logger.Debug().Msgf("Check run event is for '%s', found %d PRs", checkName, len(event.GetCheckRun().PullRequests))
 
+	prs := event.GetCheckRun().PullRequests
+	if len(prs) == 0 {
+		client, err := h.NewInstallationClient(installationID)
+		if err != nil {
+			return err
+		}
+		for page := 1; ; page++ {
+			associated, response, err := client.PullRequests.ListPullRequestsWithCommit(ctx, ownerName, repoName, commitSHA, &github.ListOptions{PerPage: 100, Page: page})
+			if err != nil {
+				return errors.Wrap(err, "failed to find pull requests for check run")
+			}
+			for _, pr := range associated {
+				if pr.GetState() == "open" && pr.GetHead().GetSHA() == commitSHA {
+					prs = append(prs, pr)
+				}
+			}
+			if response.NextPage == 0 {
+				break
+			}
+		}
+	}
+
 	evaluationFailures := 0
-	for _, pr := range event.GetCheckRun().PullRequests {
+	for _, pr := range prs {
 		// TODO(bkeyes): I'm assuming PRs in a check run are open at the time
 		// of the event, but I can't find confirmation of that in the GitHub
 		// docs. The PR object is a minimal version that is missing the "state"
@@ -88,7 +117,7 @@ func (h *CheckRun) Handle(ctx context.Context, eventType, deliveryID string, pay
 			continue
 		}
 
-		if err := h.Evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
+		if err := evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
 			Owner:  ownerName,
 			Repo:   repoName,
 			Number: pr.GetNumber(),
