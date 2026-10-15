@@ -39,7 +39,7 @@ jobs:
             ${{ env.CACHE_KEY_PREFIX }}-
 
       - name: Install Kingfisher
-        uses: EWA-Services/EWA-Actions/.github/actions/install-kingfisher@b0162aa9396641b046702bb90bdb1631f0a564f4
+        uses: ./.github/finn-ci/.github/actions/install-kingfisher
 
       - name: Install pre-commit
         run: pip install pre-commit
