@@ -141,7 +141,8 @@ jobs:
   v2:
     if: >-
       vars.AI_REVIEW_VERSION == '2' ||
-      ((vars.AI_REVIEW_VERSION == '3' || vars.AI_REVIEW_VERSION == '4' || vars.AI_REVIEW_VERSION == '5') &&
+      ((vars.AI_REVIEW_VERSION == '3' || vars.AI_REVIEW_VERSION == '4' || vars.AI_REVIEW_VERSION == '5' ||
+        vars.AI_REVIEW_VERSION == '6') &&
         (github.event_name == 'issue_comment' ||
          github.event_name == 'pull_request_review_comment'))
     uses: ./.github/workflows/shareable-code-review-v2.yaml
@@ -175,10 +176,10 @@ jobs:
       AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY }}
       TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
 
-  # The Claude versions, 3, 4, and 5, share this job: the wrapper passes the version on to the pipeline.
   v3:
     if: >-
-      (vars.AI_REVIEW_VERSION == '3' || vars.AI_REVIEW_VERSION == '4' || vars.AI_REVIEW_VERSION == '5') &&
+      (vars.AI_REVIEW_VERSION == '3' || vars.AI_REVIEW_VERSION == '4' || vars.AI_REVIEW_VERSION == '5' ||
+        vars.AI_REVIEW_VERSION == '6') &&
       github.event_name != 'issue_comment' &&
       github.event_name != 'pull_request_review_comment'
     uses: ./.github/workflows/shareable-code-review-v3.yaml
@@ -216,12 +217,12 @@ jobs:
 
   invalid-review-version:
     name: Invalid AI review version
-    if: vars.AI_REVIEW_VERSION != '' && vars.AI_REVIEW_VERSION != '1' && vars.AI_REVIEW_VERSION != '2' && vars.AI_REVIEW_VERSION != '3' && vars.AI_REVIEW_VERSION != '4' && vars.AI_REVIEW_VERSION != '5'
+    if: vars.AI_REVIEW_VERSION != '' && vars.AI_REVIEW_VERSION != '1' && vars.AI_REVIEW_VERSION != '2' && vars.AI_REVIEW_VERSION != '3' && vars.AI_REVIEW_VERSION != '4' && vars.AI_REVIEW_VERSION != '5' && vars.AI_REVIEW_VERSION != '6'
     runs-on: ${{ inputs.runner }}
     permissions: {}
     steps:
       - name: Reject unsupported review version
         run: |
-          echo "::error::Unsupported AI_REVIEW_VERSION. Set the repository Actions variable to 1, 2, 3, 4, or 5, or remove it for V1."
+          echo "::error::Unsupported AI_REVIEW_VERSION. Set the repository Actions variable to 1, 2, 3, 4, 5, or 6, or remove it for V1."
           exit 1
 # yamllint enable rule:line-length

@@ -11,7 +11,7 @@ on:
   workflow_call:
     inputs:
       review_version:
-        description: Internal review implementation version (1, 2, 3, 4, or 5)
+        description: Internal review implementation version (1, 2, 3, 4, 5, or 6)
         required: true
         type: string
       review_engine:
@@ -213,6 +213,7 @@ jobs:
       codex_model: ${{ steps.resolve.outputs.codex_model }}
       codex_reasoning_effort: ${{ steps.resolve.outputs.codex_reasoning_effort }}
       review_version: ${{ steps.resolve.outputs.review_version }}
+      no_comments_mode: ${{ steps.resolve.outputs.no_comments_mode }}
 
     steps:
       - name: Validate review GitHub token identity
@@ -258,6 +259,7 @@ jobs:
           AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL }}
           REVIEW_ENGINE: ${{ inputs.review_engine }}
           AI_REVIEW_REASONING_EFFORT: ${{ vars.AI_REVIEW_REASONING_EFFORT }}
+          AI_REVIEW_NO_COMMENTS: ${{ vars.AI_REVIEW_NO_COMMENTS }}
         run: |
           set -euo pipefail
           python3 ewa-actions/scripts/code_review/code_review_workflow.py resolve-context
@@ -643,7 +645,7 @@ jobs:
       # Version 5: choose a full or an incremental review, and collect the earlier must-fix findings still open.
       - name: Prepare version 5 review
         id: v5-prepare
-        if: needs.resolve-context.outputs.reply_required != 'true' && env.AI_REVIEW_VERSION == '5'
+        if: needs.resolve-context.outputs.reply_required != 'true' && (env.AI_REVIEW_VERSION == '5' || env.AI_REVIEW_VERSION == '6')
         env:
           CODEX_GITHUB_TOKEN: ${{ steps.codex-github-token.outputs.token }}
           REVIEW_FULL_REVIEW_REQUESTED: ${{ needs.resolve-context.outputs.full_review_requested }}
@@ -816,6 +818,10 @@ jobs:
             needs.codex-direct-cli.outputs.verdict == 'APPROVE' &&
             needs.codex-direct-cli.outputs.open_must_fix_count != '' &&
             needs.codex-direct-cli.outputs.open_must_fix_count != '0'
+          ) ||
+          (
+            needs.codex-direct-cli.outputs.verdict == 'APPROVE' &&
+            needs.resolve-context.outputs.no_comments_mode == 'judge'
           )
         )
       }}
@@ -903,8 +909,8 @@ jobs:
           stack-context-path: ${{ runner.temp }}/primary-review-artifacts/stack-context.json
           pr-comments-path: ${{ runner.temp }}/primary-review-artifacts/pr-comments.json
           primary-review-path: ${{ runner.temp }}/primary-review-artifacts/codex-review.json
-          open-findings-path: ${{ needs.resolve-context.outputs.review_version == '5' && format('{0}/primary-review-artifacts/open-must-fix.json', runner.temp) || '' }}
-          increment-path: ${{ needs.resolve-context.outputs.review_version == '5' && format('{0}/primary-review-artifacts/increment.json', runner.temp) || '' }}
+          open-findings-path: ${{ (needs.resolve-context.outputs.review_version == '5' || needs.resolve-context.outputs.review_version == '6') && format('{0}/primary-review-artifacts/open-must-fix.json', runner.temp) || '' }}
+          increment-path: ${{ (needs.resolve-context.outputs.review_version == '5' || needs.resolve-context.outputs.review_version == '6') && format('{0}/primary-review-artifacts/increment.json', runner.temp) || '' }}
           open-findings-sha256: ${{ needs.codex-direct-cli.outputs.open_findings_sha256 }}
           increment-sha256: ${{ needs.codex-direct-cli.outputs.increment_sha256 }}
           skill-catalog-sha: ${{ needs.codex-direct-cli.outputs.skill_catalog_sha }}
@@ -914,6 +920,7 @@ jobs:
           claude-code-oauth-token: ${{ (steps.claude-token.outputs.slot == '2' && secrets.CLAUDE_CODE_OAUTH_TOKEN_2 || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
           codex-version: ${{ needs.resolve-context.outputs.codex_version }}
           review-version: ${{ needs.resolve-context.outputs.review_version }}
+          no-comments-mode: ${{ needs.resolve-context.outputs.no_comments_mode }}
           review-engine: ${{ inputs.review_engine }}
           review-model: ${{ needs.resolve-context.outputs.codex_model }}
           review-reasoning-effort: ${{ needs.resolve-context.outputs.codex_reasoning_effort }}
@@ -969,6 +976,7 @@ jobs:
       ADMISSION_REASON_BASE64: ${{ needs.shadow-admission.outputs.reason_base64 }}
       ADMISSION_ADMITTED_FINDINGS: ${{ needs.shadow-admission.outputs.admitted_findings }}
       AI_REVIEW_VERSION: ${{ needs.resolve-context.outputs.review_version }}
+      REVIEW_NO_COMMENTS_MODE: ${{ needs.resolve-context.outputs.no_comments_mode }}
       TELEMETRY_ENABLED: ${{ secrets.AI_REVIEW_TELEMETRY_SUPABASE_URL != '' && secrets.AI_REVIEW_TELEMETRY_SUPABASE_SERVICE_ROLE_KEY != '' }}
       REVIEW_INVOCATION_ID: ${{ needs.codex-direct-cli.outputs.review_invocation_id }}
       REVIEW_DIFF_SIGNATURE: ${{ needs.ai-review-check-start.outputs.diff_signature }}
@@ -1021,14 +1029,14 @@ jobs:
         run: bash ewa-actions/scripts/show_api_budget.sh finish-start
 
       - name: Download saved judge result
-        if: env.AI_REVIEW_VERSION != '1' && (env.CODEX_VERDICT == 'REQUEST_CHANGES' || env.AI_REVIEW_VERSION == '5') && env.ADMISSION_RESULT == 'success'
+        if: env.AI_REVIEW_VERSION != '1' && (env.CODEX_VERDICT == 'REQUEST_CHANGES' || env.AI_REVIEW_VERSION == '5' || env.AI_REVIEW_VERSION == '6') && env.ADMISSION_RESULT == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: ${{ needs.shadow-admission.outputs.judge_artifact_name }}
           path: ${{ runner.temp }}/review-judge-result
 
       - name: Download version 5 review evidence
-        if: env.AI_REVIEW_VERSION == '5' && env.CODEX_RESULT == 'success' && env.REVIEW_OVERRIDE_ACTOR == ''
+        if: (env.AI_REVIEW_VERSION == '5' || env.AI_REVIEW_VERSION == '6') && env.CODEX_RESULT == 'success' && env.REVIEW_OVERRIDE_ACTOR == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           artifact-ids: ${{ needs.codex-direct-cli.outputs.primary_evidence_id }}
@@ -1062,7 +1070,7 @@ jobs:
       - name: Join the judge's statuses to the earlier must-fix findings
         id: v5-earlier
         if: >-
-          env.AI_REVIEW_VERSION == '5' && env.REVIEW_OVERRIDE_ACTOR == '' &&
+          (env.AI_REVIEW_VERSION == '5' || env.AI_REVIEW_VERSION == '6') && env.REVIEW_OVERRIDE_ACTOR == '' &&
           (steps.verdict.outputs.final_verdict == 'approved' || steps.verdict.outputs.final_verdict == 'requested_changes')
         run: |
           set -euo pipefail
@@ -1186,7 +1194,7 @@ jobs:
             --pr-number "$TARGET_PR_NUMBER"
 
       - name: Save version 5 publication decisions
-        if: always() && env.AI_REVIEW_VERSION == '5' && steps.verdict.outcome == 'success'
+        if: always() && (env.AI_REVIEW_VERSION == '5' || env.AI_REVIEW_VERSION == '6') && steps.verdict.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
