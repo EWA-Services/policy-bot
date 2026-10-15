@@ -17,18 +17,18 @@ jobs:
     runs-on: finn-runners
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.13"
 
       - name: Restore cached
         id: cache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         env:
           CACHE_KEY_PREFIX: ${{ runner.os }}-${{ github.repository }}-${{ github.workflow }}
         with:
@@ -38,14 +38,15 @@ jobs:
           restore-keys: |
             ${{ env.CACHE_KEY_PREFIX }}-
 
+      - name: Install Kingfisher
+        uses: ./.github/finn-ci/.github/actions/install-kingfisher
+
       - name: Install pre-commit
         run: pip install pre-commit
 
       - name: Run pre-commit
         id: pre-commit
         env:
-          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
-          SKIP: ${{ secrets.GITGUARDIAN_API_KEY == '' && 'ggshield' || '' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
@@ -58,7 +59,7 @@ jobs:
 
       - name: Upload diff patch
         if: always() && steps.pre-commit.outcome == 'failure'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: pre-commit-diff-${{ github.run_id }}
           path: pre-commit.patch
@@ -67,7 +68,7 @@ jobs:
       - name: Save cached
         if: always() && steps.cache-restore.outputs.cache-hit != 'true'
         id: cache-save
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         env:
           CACHE_KEY_PREFIX: ${{ runner.os }}-${{ github.repository }}-${{ github.workflow }}
         with:
