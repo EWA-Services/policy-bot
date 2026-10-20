@@ -42,8 +42,7 @@ jobs:
         run: pip install pre-commit
 
       - name: Install Kingfisher
-        uses: >-  # main
-          EWA-Services/EWA-Actions/.github/actions/install-kingfisher@4bb41ca687ee96eb32f8765a1b0b40418613a575
+        uses: ./.github/finn-ci/.github/actions/install-kingfisher
       - name: Scan committed pull request changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
