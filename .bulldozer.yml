@@ -21,3 +21,6 @@ merge:
   # Without this, Bulldozer will refuse to merge PRs in those repos
   # Related: https://github.com/palantir/bulldozer/issues/617
   allow_merge_with_no_checks: true
+  ignore:
+    labels:
+      - dependencies

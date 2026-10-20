@@ -41,10 +41,12 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
+      - name: Install Kingfisher
+        uses: >-  # main
+          EWA-Services/EWA-Actions/.github/actions/install-kingfisher@4bb41ca687ee96eb32f8765a1b0b40418613a575
       - name: Run pre-commit
         id: pre-commit
         env:
-          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |

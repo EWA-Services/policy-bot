@@ -9,7 +9,9 @@ policy:
     - or:
         - finn-devops bypass no review required
         - codegen-bot bypass no signature required
+        - codegen-bot bypass no signature required without automatic requests
         - dev-infrastructure team approval
+        - dev-infrastructure team approval without automatic requests
   disapproval:
     requires:
       organizations: [EWA-Services]
@@ -30,8 +32,49 @@ approval_rules:
       conditions:
         has_valid_signatures: true
   - name: codegen-bot bypass no signature required
-    description: Allow CodeGen bot to work without signature requirements
-      but still requires reviews
+    description: Allow CodeGen bot to work without signature requirements but still requires reviews
+    if:
+      targets_branch:
+        pattern: ^(main|prod)$
+      has_author_in:
+        users: ["codegen-sh[bot]"]
+      title:
+        not_matches:
+          - "^[a-z]+\\(deps(-[^)]+)?\\)!?:"
+          - "^[Bb]ump "
+    options:
+      allow_author: false
+      invalidate_on_push: false
+      request_review:
+        enabled: true
+        mode: teams
+    requires: &approval_requirements_2
+      count: 2
+      teams:
+        - EWA-Services/dev-infrastructure
+  - name: dev-infrastructure team approval
+    description: Requires 2 approvals from team for all PRs to main or prod
+    if:
+      targets_branch:
+        pattern: ^(main|prod)$
+      title:
+        not_matches:
+          - "^[a-z]+\\(deps(-[^)]+)?\\)!?:"
+          - "^[Bb]ump "
+    options:
+      allow_author: false
+      invalidate_on_push: false
+      request_review:
+        enabled: true
+        mode: teams
+    requires: &approval_requirements_3
+      count: 2
+      teams:
+        - EWA-Services/dev-infrastructure
+      conditions:
+        has_valid_signatures: true
+  - name: codegen-bot bypass no signature required without automatic requests
+    description: Retain the approval requirement without automatically requesting reviewers
     if:
       targets_branch:
         pattern: ^(main|prod)$
@@ -41,14 +84,10 @@ approval_rules:
       allow_author: false
       invalidate_on_push: false
       request_review:
-        enabled: true
-        mode: teams
-    requires:
-      count: 2
-      teams:
-        - EWA-Services/dev-infrastructure
-  - name: dev-infrastructure team approval
-    description: Requires 2 approvals from team for all PRs to main or prod
+        enabled: false
+    requires: *approval_requirements_2
+  - name: dev-infrastructure team approval without automatic requests
+    description: Retain the approval requirement without automatically requesting reviewers
     if:
       targets_branch:
         pattern: ^(main|prod)$
@@ -56,11 +95,5 @@ approval_rules:
       allow_author: false
       invalidate_on_push: false
       request_review:
-        enabled: true
-        mode: teams
-    requires:
-      count: 2
-      teams:
-        - EWA-Services/dev-infrastructure
-      conditions:
-        has_valid_signatures: true
+        enabled: false
+    requires: *approval_requirements_3
