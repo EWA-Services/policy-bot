@@ -16,7 +16,16 @@ permissions:
 
 jobs:
   slashCommandDispatch:
-    if: github.event.action == 'created'
+    # Start a runner only for new pull request comments that can hold a command.
+    # The action trims the first line, so a leading space or tab must still pass.
+    if: >-
+      github.event.action == 'created' &&
+      github.event.issue.pull_request &&
+      (
+        startsWith(github.event.comment.body, '/') ||
+        startsWith(github.event.comment.body, ' ') ||
+        startsWith(github.event.comment.body, fromJSON('"\t"'))
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Slash Command Dispatch
@@ -36,7 +45,15 @@ jobs:
           issue-type: pull-request
 
   overrideLifecycleDispatch:
-    if: github.event.action != 'created'
+    # Override commands match only an exact `/command` body, so an edit or delete
+    # matters only when the current or previous body starts with `/`.
+    if: >-
+      github.event.action != 'created' &&
+      github.event.issue.pull_request &&
+      (
+        startsWith(github.event.comment.body, '/') ||
+        startsWith(github.event.changes.body.from, '/')
+      )
     runs-on: ubuntu-latest
     steps:
       # A deleted or edited override comment starts a full AI review. Only a comment
