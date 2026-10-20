@@ -44,6 +44,14 @@ jobs:
       - name: Install Kingfisher
         uses: >-  # main
           EWA-Services/EWA-Actions/.github/actions/install-kingfisher@4bb41ca687ee96eb32f8765a1b0b40418613a575
+      - name: Scan committed pull request changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          kingfisher scan . --redact --no-ignore \
+            --since-commit "$BASE_SHA" --branch "$HEAD_SHA" \
+            --quiet --no-update-check
       - name: Run pre-commit
         id: pre-commit
         env:
