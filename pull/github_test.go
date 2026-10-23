@@ -835,3 +835,39 @@ func TestLatestWorkflowRunTransitions(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflowWebhookOverridesStaleListing(t *testing.T) {
+	for _, tc := range []struct {
+		name, apiStatus, eventStatus, want string
+		apiAttempt, eventAttempt           int
+		sameHead                           bool
+	}{
+		{"pending webhook beats stale success", "completed", "in_progress", "pending", 1, 2, true},
+		{"old completed webhook cannot beat newer rerun", "in_progress", "completed", "pending", 2, 1, true},
+		{"completed webhook recovers pending listing", "in_progress", "completed", "success", 2, 2, true},
+		{"different head is ignored", "completed", "in_progress", "success", 1, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]interface{}{"workflow_runs": []interface{}{map[string]interface{}{
+				"id": 1, "path": ".github/workflows/ci.yml", "event": "pull_request", "status": tc.apiStatus, "conclusion": "success", "run_attempt": tc.apiAttempt, "updated_at": "2026-10-23T00:00:00Z",
+			}}})
+			require.NoError(t, err)
+			responses, err := json.Marshal([]interface{}{map[string]interface{}{"status": 200, "body": string(body)}})
+			require.NoError(t, err)
+			fixture := filepath.Join(t.TempDir(), "runs.yml")
+			require.NoError(t, os.WriteFile(fixture, responses, 0600))
+			rp := &ResponsePlayer{}
+			rp.AddRule(ExactPathMatcher("/repos/testorg/testrepo/actions/runs"), fixture)
+			ctx := makeContext(t, rp, nil, nil).(*GitHubContext)
+			head := ctx.HeadSHA()
+			if !tc.sameHead {
+				head = "unrelated"
+			}
+			event := &github.WorkflowRun{ID: github.Ptr(int64(1)), Path: github.Ptr(".github/workflows/ci.yml"), Event: github.Ptr("pull_request"), HeadSHA: github.Ptr(head), Status: github.Ptr(tc.eventStatus), Conclusion: github.Ptr("success"), RunAttempt: github.Ptr(tc.eventAttempt), UpdatedAt: &github.Timestamp{Time: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)}}
+			ctx.ctx = WithWorkflowRun(ctx.ctx, event)
+			runs, err := ctx.LatestWorkflowRuns()
+			require.NoError(t, err)
+			assert.Equal(t, []string{tc.want}, runs[".github/workflows/ci.yml"])
+		})
+	}
+}
