@@ -899,10 +899,6 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 		}
 
 		for _, run := range runs.WorkflowRuns {
-			if run.GetStatus() != "completed" {
-				continue
-			}
-
 			eventName := run.GetEvent()
 
 			previousRuns := runsWithDate[*run.Path]
@@ -914,7 +910,8 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 			previousRun := previousRuns[eventName]
 
 			// This is an older run than one we've already saw, so ignore it.
-			if previousRun != nil && run.GetUpdatedAt().Before(previousRun.GetUpdatedAt().Time) {
+			if previousRun != nil && (run.GetUpdatedAt().Before(previousRun.GetUpdatedAt().Time) ||
+				(run.GetUpdatedAt().Equal(previousRun.GetUpdatedAt()) && run.GetID() < previousRun.GetID())) {
 				continue
 			}
 
@@ -930,7 +927,11 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 	ghc.workflowRuns = make(map[string][]string, len(runsWithDate))
 	for path, eventRuns := range runsWithDate {
 		for _, run := range eventRuns {
-			ghc.workflowRuns[path] = append(ghc.workflowRuns[path], run.GetConclusion())
+			conclusion := run.GetConclusion()
+			if run.GetStatus() != "completed" {
+				conclusion = "pending"
+			}
+			ghc.workflowRuns[path] = append(ghc.workflowRuns[path], conclusion)
 		}
 	}
 	return ghc.workflowRuns, nil

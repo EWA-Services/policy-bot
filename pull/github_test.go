@@ -16,9 +16,12 @@ package pull
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -679,17 +682,19 @@ func TestLatestWorkflowRuns(t *testing.T) {
 	runs, err := ctx.LatestWorkflowRuns()
 	require.NoError(t, err)
 
-	assert.Len(t, runs, 3, "incorrect number of workflow runs")
+	assert.Len(t, runs, 4, "incorrect number of workflow runs")
 	assert.ElementsMatch(t, runs[".github/workflows/a.yml"], []string{"success", "skipped"}, "incorrect conclusion for workflow run a")
 	assert.ElementsMatch(t, runs[".github/workflows/b.yml"], []string{"failure"}, "incorrect conclusion for workflow run b")
 	assert.ElementsMatch(t, runs[".github/workflows/c.yml"], []string{"cancelled"}, "incorrect conclusion for workflow run c")
+	assert.ElementsMatch(t, runs[".github/workflows/d.yml"], []string{"pending"})
 	assert.Equal(t, 2, runsRule.Count, "incorrect http request count")
 
 	// verify that workflow runs are cached
 	runs, err = ctx.LatestWorkflowRuns()
 	require.NoError(t, err)
 
-	assert.Len(t, runs, 3, "incorrect number of workflow runs")
+	assert.Len(t, runs, 4, "incorrect number of workflow runs")
+	assert.ElementsMatch(t, runs[".github/workflows/d.yml"], []string{"pending"})
 	assert.Equal(t, 2, runsRule.Count, "incorrect http request count")
 }
 
@@ -795,4 +800,38 @@ func (c *MockGlobalCache) GetPushedAt(repoID int64, sha string) (time.Time, bool
 
 func (c *MockGlobalCache) SetPushedAt(repoID int64, sha string, t time.Time) {
 	c.PushedAt[fmt.Sprintf("%d:%s", repoID, sha)] = t
+}
+
+func TestLatestWorkflowRunTransitions(t *testing.T) {
+	for _, state := range []string{"queued", "in_progress", "waiting", "requested", "pending", "completed"} {
+		for _, conclusion := range []string{"", "success", "failure", "cancelled"} {
+			t.Run(state+"/"+conclusion, func(t *testing.T) {
+				run := func(id int, status, result, event, updated string) map[string]interface{} {
+					return map[string]interface{}{"id": id, "path": ".github/workflows/test.yml", "event": event, "status": status, "conclusion": result, "updated_at": updated}
+				}
+				// A previous success must not hide a replacement run, including equal timestamps.
+				body, err := json.Marshal(map[string]interface{}{"workflow_runs": []interface{}{
+					run(3, state, conclusion, "pull_request", "2026-10-23T00:00:01Z"),
+					run(2, "completed", "success", "pull_request", "2026-10-23T00:00:01Z"),
+					run(1, "completed", "failure", "pull_request", "2026-10-23T00:00:00Z"),
+					run(4, "completed", "success", "push", "2026-10-23T00:00:02Z"),
+				}})
+				require.NoError(t, err)
+				responses, err := json.Marshal([]interface{}{map[string]interface{}{"status": 200, "body": string(body)}})
+				require.NoError(t, err)
+				fixture := filepath.Join(t.TempDir(), "runs.yml")
+				require.NoError(t, os.WriteFile(fixture, responses, 0600))
+				rp := &ResponsePlayer{}
+				rp.AddRule(ExactPathMatcher("/repos/testorg/testrepo/actions/runs"), fixture)
+				ctx := makeContext(t, rp, nil, nil)
+				runs, err := ctx.LatestWorkflowRuns()
+				require.NoError(t, err)
+				expected := conclusion
+				if state != "completed" {
+					expected = "pending"
+				}
+				assert.ElementsMatch(t, []string{expected, "success"}, runs[".github/workflows/test.yml"])
+			})
+		}
+	}
 }
