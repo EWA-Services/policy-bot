@@ -65,9 +65,10 @@ func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRun
 	installationID := githubapp.GetInstallationIDFromEvent(&event)
 
 	ctx, logger := githubapp.PrepareRepoContext(ctx, installationID, repo)
+	ctx = pull.WithWorkflowRun(ctx, workflowRun)
 
 	prs := workflowRun.PullRequests
-	if len(prs) == 0 {
+	if len(prs) == 0 && workflowRun.GetEvent() == "pull_request" {
 		client, err := h.NewInstallationClient(installationID)
 		if err != nil {
 			return err

@@ -272,5 +272,15 @@ approval_rules:
 		})
 	}
 	checkHandler := &CheckRun{Base: h.Base}
-	assert.False(t, checkHandler.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "new matrix job"))
+	assert.False(t, checkHandler.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "new matrix job", true))
+}
+
+func TestCompletedJobDoesNotReevaluateWorkflowOnlyPolicy(t *testing.T) {
+	h := &CheckRun{Base: Base{ClientCreator: stubClientCreator{}, ConfigFetcher: &ConfigFetcher{
+		Loader: mockConfigLoader{loadConfig: func(context.Context, *github.Client, string, string, string) (appconfig.Config, error) {
+			return appconfig.Config{Content: []byte("policy:\n  approval: [CI]\napproval_rules:\n  - name: CI\n    requires:\n      count: 0\n      conditions:\n        has_workflow_result:\n          workflows: [.github/workflows/ci.yml]\n"), Source: "testorg/testrepo@main", Path: ".policy.yml"}, nil
+		}}, SeenPolicyCache: NewSeenPolicyCache(),
+	}}}
+	assert.True(t, h.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "matrix job", false))
+	assert.False(t, h.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "matrix job", true))
 }

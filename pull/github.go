@@ -853,6 +853,13 @@ func (ghc *GitHubContext) getCheckStatuses() (map[string]string, error) {
 	return statuses, nil
 }
 
+type workflowRunEventKey struct{}
+
+// WithWorkflowRun preserves the webhook state while the REST listing catches up.
+func WithWorkflowRun(ctx context.Context, run *github.WorkflowRun) context.Context {
+	return context.WithValue(ctx, workflowRunEventKey{}, run)
+}
+
 func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 	if ghc.workflowRuns != nil {
 		return ghc.workflowRuns, nil
@@ -922,6 +929,22 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 			break
 		}
 		opt.Page = resp.NextPage
+	}
+
+	if eventRun, ok := ghc.ctx.Value(workflowRunEventKey{}).(*github.WorkflowRun); ok &&
+		eventRun.GetHeadSHA() == ghc.HeadSHA() && eventRun.GetPath() != "" {
+		path, event := eventRun.GetPath(), eventRun.GetEvent()
+		if runsWithDate[path] == nil {
+			runsWithDate[path] = make(map[string]*github.WorkflowRun)
+		}
+		previous := runsWithDate[path][event]
+		newerAttempt := previous != nil && eventRun.GetID() == previous.GetID() && eventRun.GetRunAttempt() > previous.GetRunAttempt()
+		olderAttempt := previous != nil && eventRun.GetID() == previous.GetID() && eventRun.GetRunAttempt() < previous.GetRunAttempt()
+		if previous == nil || newerAttempt || (!olderAttempt &&
+			(eventRun.GetUpdatedAt().After(previous.GetUpdatedAt().Time) ||
+				(eventRun.GetUpdatedAt().Equal(previous.GetUpdatedAt()) && eventRun.GetID() >= previous.GetID()))) {
+			runsWithDate[path][event] = eventRun
+		}
 	}
 
 	ghc.workflowRuns = make(map[string][]string, len(runsWithDate))

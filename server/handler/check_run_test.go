@@ -52,7 +52,7 @@ func TestShouldSkipCheckRun(t *testing.T) {
 				return appconfig.Config{}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, ""))
+		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, "", false))
 	})
 
 	t.Run("returns false for empty baseBranch", func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestShouldSkipCheckRun(t *testing.T) {
 				return appconfig.Config{}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, "", checkName))
+		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, "", checkName, false))
 	})
 
 	t.Run("returns true when repo has no policy file (Config==nil)", func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestShouldSkipCheckRun(t *testing.T) {
 				return appconfig.Config{}, nil
 			},
 		})
-		assert.True(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName))
+		assert.True(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName, false))
 	})
 
 	t.Run("returns true when policy has no has_status blocks", func(t *testing.T) {
@@ -94,7 +94,7 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.True(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName))
+		assert.True(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName, false))
 	})
 
 	t.Run("returns true when check name is not in policy's status list", func(t *testing.T) {
@@ -120,7 +120,7 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.True(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, "Unrelated Check"))
+		assert.True(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, "Unrelated Check", false))
 	})
 
 	t.Run("returns false when check name IS in policy's status list", func(t *testing.T) {
@@ -146,7 +146,7 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName))
+		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName, false))
 	})
 
 	t.Run("returns false on LoadError (fail open)", func(t *testing.T) {
@@ -158,7 +158,7 @@ approval_rules:
 				}, errors.New("transient github failure")
 			},
 		})
-		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName))
+		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName, false))
 	})
 
 	t.Run("returns false on ParseError (fail open)", func(t *testing.T) {
@@ -172,7 +172,7 @@ approval_rules:
 				}, nil
 			},
 		})
-		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName))
+		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName, false))
 	})
 
 	t.Run("returns false when client creation fails (fail open)", func(t *testing.T) {
@@ -190,6 +190,6 @@ approval_rules:
 				},
 			},
 		}
-		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName))
+		assert.False(t, h.shouldSkipCheckRun(context.Background(), installationID, owner, repo, baseBranch, checkName, false))
 	})
 }
