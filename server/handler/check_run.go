@@ -108,7 +108,7 @@ func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent,
 		// listed. Each skip saves 3-5 GitHub API calls. Fails open in
 		// every uncertain case (load/parse error, empty identifiers).
 		baseBranch := pr.GetBase().GetRef()
-		if h.shouldSkipCheckRun(ctx, installationID, ownerName, repoName, baseBranch, checkName, event.GetAction() == "created" && event.GetCheckRun().GetApp().GetSlug() == "github-actions") {
+		if h.shouldSkipCheckRun(ctx, installationID, ownerName, repoName, baseBranch, checkName) {
 			logger.Info().
 				Str("check_name", checkName).
 				Str("base_branch", baseBranch).
@@ -150,7 +150,7 @@ func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent,
 // Returns false (fall-through to the full evaluation) for uncertain cases:
 // policy fetch failed, policy parse failed, or required identifiers are
 // empty. Never silently drops a relevant event.
-func (h *CheckRun) shouldSkipCheckRun(ctx context.Context, installationID int64, owner, repo, baseBranch, checkName string, workflowStarted bool) bool {
+func (h *CheckRun) shouldSkipCheckRun(ctx context.Context, installationID int64, owner, repo, baseBranch, checkName string) bool {
 	if baseBranch == "" || checkName == "" {
 		return false
 	}
@@ -167,12 +167,6 @@ func (h *CheckRun) shouldSkipCheckRun(ctx context.Context, installationID int64,
 	if fetched.Config == nil {
 		// No `.policy.yml` in the repo. Nothing the bot can evaluate, skip.
 		return true
-	}
-
-	// A newly created job can invalidate a workflow result before workflow_run
-	// reports in_progress. Check payloads do not identify their workflow file.
-	if _, hasWorkflows := policyWorkflowNames(fetched.Config); workflowStarted && hasWorkflows {
-		return false
 	}
 
 	names, hasAny := policyStatusNames(fetched.Config)

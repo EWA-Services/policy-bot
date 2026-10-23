@@ -271,16 +271,26 @@ approval_rules:
 			assert.Equal(t, expected, calls)
 		})
 	}
-	checkHandler := &CheckRun{Base: h.Base}
-	assert.False(t, checkHandler.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "new matrix job", true))
 }
 
-func TestCompletedJobDoesNotReevaluateWorkflowOnlyPolicy(t *testing.T) {
-	h := &CheckRun{Base: Base{ClientCreator: stubClientCreator{}, ConfigFetcher: &ConfigFetcher{
-		Loader: mockConfigLoader{loadConfig: func(context.Context, *github.Client, string, string, string) (appconfig.Config, error) {
-			return appconfig.Config{Content: []byte("policy:\n  approval: [CI]\napproval_rules:\n  - name: CI\n    requires:\n      count: 0\n      conditions:\n        has_workflow_result:\n          workflows: [.github/workflows/ci.yml]\n"), Source: "testorg/testrepo@main", Path: ".policy.yml"}, nil
-		}}, SeenPolicyCache: NewSeenPolicyCache(),
-	}}}
-	assert.True(t, h.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "matrix job", false))
-	assert.False(t, h.shouldSkipCheckRun(context.Background(), 1, "testorg", "testrepo", "main", "matrix job", true))
+func TestUnassociatedWorkflowLookupOnlyForPullRequests(t *testing.T) {
+	for _, kind := range []string{"push", "pull_request"} {
+		t.Run(kind, func(t *testing.T) {
+			h := &WorkflowRun{Base: Base{ClientCreator: failingClientCreator{}}}
+			event := github.WorkflowRunEvent{
+				Action: github.Ptr("in_progress"), Installation: &github.Installation{ID: github.Ptr(int64(1))},
+				Repo:        &github.Repository{ID: github.Ptr(int64(2)), Name: github.Ptr("testrepo"), Owner: &github.User{Login: github.Ptr("testorg")}},
+				WorkflowRun: &github.WorkflowRun{Event: github.Ptr(kind), Path: github.Ptr(".github/workflows/ci.yml"), HeadSHA: github.Ptr("same-head")},
+			}
+			err := h.processEvent(context.Background(), event, func(context.Context, int64, common.Trigger, pull.Locator) error {
+				t.Fatal("cannot evaluate a PR before its association is known")
+				return nil
+			})
+			if kind == "push" {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
 }

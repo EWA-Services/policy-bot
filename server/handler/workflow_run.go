@@ -25,6 +25,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+type workflowRunEvaluator func(context.Context, int64, common.Trigger, pull.Locator) error
+
 type WorkflowRun struct {
 	Base
 }
@@ -42,7 +44,7 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 	return h.processEvent(ctx, event, h.Evaluate)
 }
 
-func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRunEvent, evaluate checkRunEvaluator) error {
+func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRunEvent, evaluate workflowRunEvaluator) error {
 	switch event.GetAction() {
 	case "requested", "in_progress", "completed":
 	default:

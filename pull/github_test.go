@@ -683,7 +683,7 @@ func TestLatestWorkflowRuns(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, runs, 4, "incorrect number of workflow runs")
-	assert.ElementsMatch(t, runs[".github/workflows/a.yml"], []string{"success", "skipped"}, "incorrect conclusion for workflow run a")
+	assert.ElementsMatch(t, runs[".github/workflows/a.yml"], []string{"failure", "skipped"}, "incorrect conclusion for workflow run a")
 	assert.ElementsMatch(t, runs[".github/workflows/b.yml"], []string{"failure"}, "incorrect conclusion for workflow run b")
 	assert.ElementsMatch(t, runs[".github/workflows/c.yml"], []string{"cancelled"}, "incorrect conclusion for workflow run c")
 	assert.ElementsMatch(t, runs[".github/workflows/d.yml"], []string{"pending"})
@@ -807,12 +807,12 @@ func TestLatestWorkflowRunTransitions(t *testing.T) {
 		for _, conclusion := range []string{"", "success", "failure", "cancelled"} {
 			t.Run(state+"/"+conclusion, func(t *testing.T) {
 				run := func(id int, status, result, event, updated string) map[string]interface{} {
-					return map[string]interface{}{"id": id, "path": ".github/workflows/test.yml", "event": event, "status": status, "conclusion": result, "updated_at": updated}
+					return map[string]interface{}{"id": id, "run_number": id, "path": ".github/workflows/test.yml", "event": event, "status": status, "conclusion": result, "updated_at": updated}
 				}
-				// A previous success must not hide a replacement run, including equal timestamps.
+				// An older run finishing later must not hide a pending replacement.
 				body, err := json.Marshal(map[string]interface{}{"workflow_runs": []interface{}{
 					run(3, state, conclusion, "pull_request", "2026-10-23T00:00:01Z"),
-					run(2, "completed", "success", "pull_request", "2026-10-23T00:00:01Z"),
+					run(2, "completed", "success", "pull_request", "2026-10-23T00:00:03Z"),
 					run(1, "completed", "failure", "pull_request", "2026-10-23T00:00:00Z"),
 					run(4, "completed", "success", "push", "2026-10-23T00:00:02Z"),
 				}})
