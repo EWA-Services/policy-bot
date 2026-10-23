@@ -916,9 +916,7 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 
 			previousRun := previousRuns[eventName]
 
-			// This is an older run than one we've already saw, so ignore it.
-			if previousRun != nil && (run.GetUpdatedAt().Before(previousRun.GetUpdatedAt().Time) ||
-				(run.GetUpdatedAt().Equal(previousRun.GetUpdatedAt()) && run.GetID() < previousRun.GetID())) {
+			if previousRun != nil && !workflowRunAtLeastAsNew(run, previousRun) {
 				continue
 			}
 
@@ -938,11 +936,7 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 			runsWithDate[path] = make(map[string]*github.WorkflowRun)
 		}
 		previous := runsWithDate[path][event]
-		newerAttempt := previous != nil && eventRun.GetID() == previous.GetID() && eventRun.GetRunAttempt() > previous.GetRunAttempt()
-		olderAttempt := previous != nil && eventRun.GetID() == previous.GetID() && eventRun.GetRunAttempt() < previous.GetRunAttempt()
-		if previous == nil || newerAttempt || (!olderAttempt &&
-			(eventRun.GetUpdatedAt().After(previous.GetUpdatedAt().Time) ||
-				(eventRun.GetUpdatedAt().Equal(previous.GetUpdatedAt()) && eventRun.GetID() >= previous.GetID()))) {
+		if previous == nil || workflowRunAtLeastAsNew(eventRun, previous) {
 			runsWithDate[path][event] = eventRun
 		}
 	}
@@ -958,6 +952,19 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 		}
 	}
 	return ghc.workflowRuns, nil
+}
+
+func workflowRunAtLeastAsNew(run, previous *github.WorkflowRun) bool {
+	if run.GetRunNumber() != previous.GetRunNumber() {
+		return run.GetRunNumber() > previous.GetRunNumber()
+	}
+	if run.GetID() != previous.GetID() {
+		return run.GetID() > previous.GetID()
+	}
+	if run.GetRunAttempt() != previous.GetRunAttempt() {
+		return run.GetRunAttempt() > previous.GetRunAttempt()
+	}
+	return !run.GetUpdatedAt().Before(previous.GetUpdatedAt().Time)
 }
 
 func (ghc *GitHubContext) Labels() ([]string, error) {

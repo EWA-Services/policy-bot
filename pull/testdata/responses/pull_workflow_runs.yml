@@ -8,7 +8,7 @@
       "total_count": 7,
       "workflow_runs": [
         {
-          "comment": "This one fails in id: 6, but that timestamp is earlier than this one, so is ignored",
+          "comment": "The newer execution id: 6 supersedes this success despite its earlier update timestamp",
           "id": 1,
           "path": ".github/workflows/a.yml",
           "event": "pull_request",
@@ -19,7 +19,7 @@
           "pull_requests": []
         },
         {
-          "comment": "This one fails in id: 5, and that timestamp is later than this one, so is taken as the resutl of the workflow",
+          "comment": "The newer execution id: 5 supersedes this success",
           "id": 2,
           "path": ".github/workflows/b.yml",
           "event": "pull_request",
