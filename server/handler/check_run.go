@@ -169,6 +169,12 @@ func (h *CheckRun) shouldSkipCheckRun(ctx context.Context, installationID int64,
 		return true
 	}
 
+	// A newly created job can invalidate a workflow result before workflow_run
+	// reports in_progress. Check payloads do not identify their workflow file.
+	if _, hasWorkflows := policyWorkflowNames(fetched.Config); hasWorkflows {
+		return false
+	}
+
 	names, hasAny := policyStatusNames(fetched.Config)
 	if !hasAny {
 		// Policy exists but has no status predicates anywhere. No check_run

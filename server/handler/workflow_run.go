@@ -39,7 +39,13 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 		return errors.Wrap(err, "failed to parse workflow_run event payload")
 	}
 
-	if event.GetAction() != "completed" {
+	return h.processEvent(ctx, event, h.Evaluate)
+}
+
+func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRunEvent, evaluate checkRunEvaluator) error {
+	switch event.GetAction() {
+	case "requested", "in_progress", "completed":
+	default:
 		return nil
 	}
 
@@ -60,8 +66,30 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 
 	ctx, logger := githubapp.PrepareRepoContext(ctx, installationID, repo)
 
+	prs := workflowRun.PullRequests
+	if len(prs) == 0 {
+		client, err := h.NewInstallationClient(installationID)
+		if err != nil {
+			return err
+		}
+		for page := 1; ; page++ {
+			associated, response, err := client.PullRequests.ListPullRequestsWithCommit(ctx, ownerName, repoName, commitSHA, &github.ListOptions{PerPage: 100, Page: page})
+			if err != nil {
+				return errors.Wrap(err, "failed to find pull requests for workflow run")
+			}
+			for _, pr := range associated {
+				if pr.GetState() == "open" && pr.GetHead().GetSHA() == commitSHA {
+					prs = append(prs, pr)
+				}
+			}
+			if response.NextPage == 0 {
+				break
+			}
+		}
+	}
+
 	evaluationFailures := 0
-	for _, pr := range event.GetWorkflowRun().PullRequests {
+	for _, pr := range prs {
 		// The `workflow_run` event includes pull requests that contain the SHA
 		// which is being checked. These can be pull requests _from_ our
 		// repository _to_ another one, for example if it's been forked and
@@ -91,7 +119,7 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 			continue
 		}
 
-		if err := h.Evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
+		if err := evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
 			Owner:  ownerName,
 			Repo:   repoName,
 			Number: pr.GetNumber(),
