@@ -21,6 +21,8 @@ import (
 
 	"github.com/google/go-github/v92/github"
 	"github.com/palantir/go-githubapp/appconfig"
+	"github.com/palantir/policy-bot/policy/common"
+	"github.com/palantir/policy-bot/pull"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -228,4 +230,67 @@ approval_rules:
 		}
 		assert.False(t, h.shouldSkipWorkflowRun(context.Background(), installationID, owner, repo, baseBranch, workflowPath))
 	})
+}
+
+func TestWorkflowRunTransitions(t *testing.T) {
+	h := &WorkflowRun{Base: Base{ClientCreator: stubClientCreator{}, ConfigFetcher: &ConfigFetcher{
+		Loader: mockConfigLoader{loadConfig: func(context.Context, *github.Client, string, string, string) (appconfig.Config, error) {
+			return appconfig.Config{Content: []byte(`
+policy:
+  approval: [CI]
+approval_rules:
+  - name: CI
+    requires:
+      count: 0
+      conditions:
+        has_workflow_result:
+          workflows: [.github/workflows/ci.yml]
+          conclusions: [success]
+`), Source: "testorg/testrepo@main", Path: ".policy.yml"}, nil
+		}}, SeenPolicyCache: NewSeenPolicyCache(),
+	}}}
+	for _, action := range []string{"requested", "in_progress", "completed", "unrelated"} {
+		t.Run(action, func(t *testing.T) {
+			calls := 0
+			event := github.WorkflowRunEvent{
+				Action: github.Ptr(action), Installation: &github.Installation{ID: github.Ptr(int64(1))},
+				Repo:        &github.Repository{ID: github.Ptr(int64(2)), Name: github.Ptr("testrepo"), Owner: &github.User{Login: github.Ptr("testorg")}},
+				WorkflowRun: &github.WorkflowRun{Path: github.Ptr(".github/workflows/ci.yml"), HeadSHA: github.Ptr("same-head"), PullRequests: []*github.PullRequest{{Number: github.Ptr(42), Base: &github.PullRequestBranch{Ref: github.Ptr("main"), Repo: &github.Repository{ID: github.Ptr(int64(2))}}}}},
+			}
+			err := h.processEvent(context.Background(), event, func(_ context.Context, _ int64, trigger common.Trigger, loc pull.Locator) error {
+				calls++
+				assert.Equal(t, common.TriggerStatus, trigger)
+				assert.Equal(t, 42, loc.Number)
+				return nil
+			})
+			assert.NoError(t, err)
+			expected := 1
+			if action == "unrelated" {
+				expected = 0
+			}
+			assert.Equal(t, expected, calls)
+		})
+	}
+}
+
+func TestUnassociatedWorkflowLookupOnlyForPullRequests(t *testing.T) {
+	for _, kind := range []string{"push", "pull_request"} {
+		t.Run(kind, func(t *testing.T) {
+			h := &WorkflowRun{Base: Base{ClientCreator: failingClientCreator{}}}
+			event := github.WorkflowRunEvent{
+				Action: github.Ptr("in_progress"), Installation: &github.Installation{ID: github.Ptr(int64(1))},
+				Repo:        &github.Repository{ID: github.Ptr(int64(2)), Name: github.Ptr("testrepo"), Owner: &github.User{Login: github.Ptr("testorg")}},
+				WorkflowRun: &github.WorkflowRun{Event: github.Ptr(kind), Path: github.Ptr(".github/workflows/ci.yml"), HeadSHA: github.Ptr("same-head")},
+			}
+			err := h.processEvent(context.Background(), event, func(context.Context, int64, common.Trigger, pull.Locator) error {
+				t.Fatal("cannot evaluate a PR before its association is known")
+				return nil
+			})
+			if kind == "push" {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
 }

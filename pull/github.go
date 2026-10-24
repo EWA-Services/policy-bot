@@ -853,6 +853,13 @@ func (ghc *GitHubContext) getCheckStatuses() (map[string]string, error) {
 	return statuses, nil
 }
 
+type workflowRunEventKey struct{}
+
+// WithWorkflowRun preserves the webhook state while the REST listing catches up.
+func WithWorkflowRun(ctx context.Context, run *github.WorkflowRun) context.Context {
+	return context.WithValue(ctx, workflowRunEventKey{}, run)
+}
+
 func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 	if ghc.workflowRuns != nil {
 		return ghc.workflowRuns, nil
@@ -899,10 +906,6 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 		}
 
 		for _, run := range runs.WorkflowRuns {
-			if run.GetStatus() != "completed" {
-				continue
-			}
-
 			eventName := run.GetEvent()
 
 			previousRuns := runsWithDate[*run.Path]
@@ -913,8 +916,7 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 
 			previousRun := previousRuns[eventName]
 
-			// This is an older run than one we've already saw, so ignore it.
-			if previousRun != nil && run.GetUpdatedAt().Before(previousRun.GetUpdatedAt().Time) {
+			if previousRun != nil && !workflowRunAtLeastAsNew(run, previousRun) {
 				continue
 			}
 
@@ -927,13 +929,42 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 		opt.Page = resp.NextPage
 	}
 
+	if eventRun, ok := ghc.ctx.Value(workflowRunEventKey{}).(*github.WorkflowRun); ok &&
+		eventRun.GetHeadSHA() == ghc.HeadSHA() && eventRun.GetPath() != "" {
+		path, event := eventRun.GetPath(), eventRun.GetEvent()
+		if runsWithDate[path] == nil {
+			runsWithDate[path] = make(map[string]*github.WorkflowRun)
+		}
+		previous := runsWithDate[path][event]
+		if previous == nil || workflowRunAtLeastAsNew(eventRun, previous) {
+			runsWithDate[path][event] = eventRun
+		}
+	}
+
 	ghc.workflowRuns = make(map[string][]string, len(runsWithDate))
 	for path, eventRuns := range runsWithDate {
 		for _, run := range eventRuns {
-			ghc.workflowRuns[path] = append(ghc.workflowRuns[path], run.GetConclusion())
+			conclusion := run.GetConclusion()
+			if run.GetStatus() != "completed" {
+				conclusion = "pending"
+			}
+			ghc.workflowRuns[path] = append(ghc.workflowRuns[path], conclusion)
 		}
 	}
 	return ghc.workflowRuns, nil
+}
+
+func workflowRunAtLeastAsNew(run, previous *github.WorkflowRun) bool {
+	if run.GetRunNumber() != previous.GetRunNumber() {
+		return run.GetRunNumber() > previous.GetRunNumber()
+	}
+	if run.GetID() != previous.GetID() {
+		return run.GetID() > previous.GetID()
+	}
+	if run.GetRunAttempt() != previous.GetRunAttempt() {
+		return run.GetRunAttempt() > previous.GetRunAttempt()
+	}
+	return !run.GetUpdatedAt().Before(previous.GetUpdatedAt().Time)
 }
 
 func (ghc *GitHubContext) Labels() ([]string, error) {
