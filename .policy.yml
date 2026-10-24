@@ -9,6 +9,7 @@ policy:
     - or:
         - finn-devops bypass no review required
         - platform approver approval
+        - platform approver approval without automatic requests
     - Jai or Poom approval for PR size workflow changes
   disapproval:
     requires:
@@ -53,16 +54,17 @@ approval_rules:
     if:
       targets_branch:
         pattern: ^(main|master|develop|prod)$
-      # Skip this rule (and its request_review) for finn-devops automation PRs.
-      # The finn-devops bypass rule above already satisfies the `or` policy
-      # for these PRs; matching here too would needlessly tag a human approver
-      # on every sync/chore/release PR.
       title:
         not_matches:
           - "^ci: synced file\\(s\\)"
           - "^chore\\(deps\\): update pinned action SHAs"
           - "^release(?:\\([^)]*\\))?:"
           - ^chore\([^)]*\):.*release.*
+          - "^[a-z]+\\(deps(-dev)?\\)!?:"
+          - >-
+            ^[Bb]ump \S+ from v?\d+(\.\d+)*([+-]\S+)? to v?\d+(\.\d+)*([+-]\S+)?( in /.*)?$
+          - >-
+            ^[Bb]ump the \S+ group( across [0-9]+ director(y|ies)| in /\S+)? with [0-9]+ updates?$
     options:
       allow_author: false
       invalidate_on_push: false
@@ -70,7 +72,7 @@ approval_rules:
         enabled: true
         mode: random-users
         count: 1
-    requires:
+    requires: &approval_requirements_3
       count: 1
       users: [jai, poom, Sunn-y-Arora, flkas]
       conditions:
@@ -85,3 +87,20 @@ approval_rules:
           conclusions: [success, skipped]
           workflows:
             - .github/workflows/pr-size-gate.yaml
+  - name: platform approver approval without automatic requests
+    description: Retain the approval requirement without automatically requesting reviewers
+    if:
+      targets_branch:
+        pattern: ^(main|master|develop|prod)$
+      title:
+        not_matches:
+          - "^ci: synced file\\(s\\)"
+          - "^chore\\(deps\\): update pinned action SHAs"
+          - "^release(?:\\([^)]*\\))?:"
+          - ^chore\([^)]*\):.*release.*
+    options:
+      allow_author: false
+      invalidate_on_push: false
+      request_review:
+        enabled: false
+    requires: *approval_requirements_3
