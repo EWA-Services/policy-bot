@@ -21,6 +21,9 @@ merge:
   # Upstream issue: https://github.com/palantir/bulldozer/issues/617
   allow_merge_with_no_checks: false
 
+  ignore:
+    labels:
+      - dependencies
 # Auto Rebase is off org-wide; bulldozer merges main into behind automerge PRs (GitHub signs these merge commits).
 update:
   trigger:
