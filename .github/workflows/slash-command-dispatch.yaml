@@ -45,10 +45,7 @@ jobs:
           issue-type: pull-request
 
   overrideLifecycleDispatch:
-    # Override commands match only an exact `/command` body, so an edit or delete
-    # matters only when the current or previous body starts with `/`.
     if: >-
-      github.event.action != 'created' &&
       github.event.issue.pull_request &&
       (
         startsWith(github.event.comment.body, '/') ||
@@ -56,8 +53,6 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      # A deleted or edited override comment starts a full AI review. Only a comment
-      # author with write access may start one, as Slash Command Dispatch requires.
       - name: Check comment author access
         id: access
         env:
@@ -71,7 +66,8 @@ jobs:
             admin|maintain|write) echo "allowed=true" >> "$GITHUB_OUTPUT" ;;
             *)
               echo "allowed=false" >> "$GITHUB_OUTPUT"
-              echo "The comment author has no write access; no override lifecycle event is routed."
+              echo "::notice::override-dispatch: ${COMMENT_AUTHOR} lacks write permission" \
+                "for ${GITHUB_REPOSITORY}; returned permission='${permission}'"
               ;;
           esac
 
