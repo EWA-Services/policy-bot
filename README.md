@@ -609,7 +609,11 @@ options:
     # count sets the number of users requested to review the pull request when
     # using the `random-users` mode. If count is not set or set to 0, request the
     # number of users set by requires.count. Setting this is useful when you want
-    # to request more reviewers than the required count. Defaults to 0.
+    # to request more reviewers than the required count. When count is at least
+    # requires.count, existing approvals count toward count. Otherwise, each
+    # request adds at most count new reviewers and never more than the approvals
+    # still needed. No request is made after the rule has the required approvals.
+    # Defaults to 0.
     count: 0
 
   # "methods" defines how users may express approval.
@@ -1041,8 +1045,9 @@ options:
     mode: all-users|random-users|teams
 ```
 
-The set of requested reviewers will not include the author of the pull request or
-users who are not collaborators on the repository.
+The set of requested reviewers will not include the author of the pull request,
+users who are not collaborators on the repository, or users whose approval
+currently counts for the rule.
 
 When requesting reviews for rules that use repository permissions to select
 approvers, only users who are direct collaborators or members of

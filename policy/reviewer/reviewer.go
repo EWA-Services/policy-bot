@@ -76,7 +76,8 @@ func (s Selection) IsEmpty() bool {
 	return len(s.Users) == 0 && len(s.Teams) == 0
 }
 
-// FindRequests returns all pending leaf results with review requests enabled.
+// FindRequests returns pending leaf results with review requests enabled that
+// still need more approvals.
 func FindRequests(result *common.Result) []*common.Result {
 	if result.Status != common.StatusPending {
 		return nil
@@ -86,41 +87,44 @@ func FindRequests(result *common.Result) []*common.Result {
 	for _, c := range result.Children {
 		reqs = append(reqs, FindRequests(c)...)
 	}
-	if len(result.Children) == 0 && result.ReviewRequestRule != nil && result.Error == nil {
+	if len(result.Children) == 0 && result.ReviewRequestRule != nil && result.Error == nil &&
+		result.RemainingApprovals() > 0 {
 		reqs = append(reqs, result)
 	}
 	return reqs
 }
 
-// select n random values from the list of users without reuse
-func selectRandomUsers(n int, users []string, r *rand.Rand) []string {
-	var selections []string
-	if n == 0 {
-		return selections
-	}
-	if n >= len(users) {
+func randomlyOrderUsers(users []string, r *rand.Rand) []string {
+	if len(users) <= 1 {
 		return users
 	}
 
-	selected := make(map[int]bool)
-	for range n {
-		j := 0
-		for {
-			// Upper bound the number of attempts to uniquely select random users to n*5
-			if j > n*5 {
-				// We haven't been able to select a random value, bail loudly
-				panic(fmt.Sprintf("failed to select random value for %d %d", n, len(users)))
-			}
-			m := r.Intn(len(users))
-			if !selected[m] {
-				selected[m] = true
-				selections = append(selections, users[m])
-				break
-			}
-			j++
+	ordered := make([]string, 0, len(users))
+	selected := make(map[int]struct{}, len(users))
+	for len(ordered) < len(users) {
+		index := r.Intn(len(users))
+		if _, ok := selected[index]; ok {
+			continue
+		}
+		selected[index] = struct{}{}
+		ordered = append(ordered, users[index])
+	}
+	return ordered
+}
+
+func withoutApprovers(users []string, approvers []*common.Candidate) []string {
+	approvedUsers := make(map[string]struct{}, len(approvers))
+	for _, approver := range approvers {
+		approvedUsers[approver.User] = struct{}{}
+	}
+
+	var remaining []string
+	for _, user := range users {
+		if _, approved := approvedUsers[user]; !approved {
+			remaining = append(remaining, user)
 		}
 	}
-	return selections
+	return remaining
 }
 
 func selectTeamMembers(prctx pull.Context, allTeams []string) (map[string][]string, error) {
@@ -149,7 +153,11 @@ func selectOrgMembers(prctx pull.Context, allOrgs []string) ([]string, error) {
 	return allOrgsMembers, nil
 }
 
-func getPossibleReviewers(prctx pull.Context, users map[string]struct{}, collaborators []*pull.Collaborator) []string {
+func getPossibleReviewers(
+	prctx pull.Context,
+	users map[string]struct{},
+	collaborators []*pull.Collaborator,
+) []string {
 	var possibleReviewers []string
 	for _, c := range collaborators {
 		_, exists := users[c.Name]
@@ -270,12 +278,23 @@ func selectUserReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 
 	switch result.ReviewRequestRule.Mode {
 	case common.RequestModeAllUsers:
-		logger.Debug().Msgf("Found %d eligible reviewers; selecting all", len(possibleReviewers))
-		selection.Users = append(selection.Users, possibleReviewers...)
+		remainingReviewers := withoutApprovers(possibleReviewers, result.Requires.Approvers)
+		logger.Debug().Msgf("Found %d eligible reviewers; selecting %d who have not approved", len(possibleReviewers), len(remainingReviewers))
+		selection.Users = append(selection.Users, remainingReviewers...)
 
 	case common.RequestModeRandomUsers:
-		count := result.ReviewRequestRule.RequestedCount
-		selectedUsers := selectRandomUsers(count, possibleReviewers, r)
+		requestedCount := result.ReviewRequestRule.RequestedCount
+		requiredCount := result.Requires.Count
+		approvalCount := len(result.Requires.Approvers)
+		count := min(requestedCount, result.RemainingApprovals())
+		if requestedCount >= requiredCount {
+			count = max(0, requestedCount-approvalCount)
+		}
+
+		orderedReviewers := randomlyOrderUsers(possibleReviewers, r)
+		remainingReviewers := withoutApprovers(orderedReviewers, result.Requires.Approvers)
+		count = min(count, len(remainingReviewers))
+		selectedUsers := remainingReviewers[:count]
 
 		logger.Debug().Msgf("Found %d eligible reviewers; randomly selecting %d", len(possibleReviewers), count)
 		selection.Users = append(selection.Users, selectedUsers...)

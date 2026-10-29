@@ -54,7 +54,6 @@ type ReviewRequestRule struct {
 	Users          []string
 	Organizations  []string
 	Permissions    []pull.Permission
-	RequiredCount  int
 	RequestedCount int
 
 	Mode RequestMode
@@ -80,6 +79,12 @@ type Result struct {
 	ReviewRequestRule *ReviewRequestRule
 
 	Children []*Result
+}
+
+// RemainingApprovals returns the number of additional approvals needed by the
+// result.
+func (r *Result) RemainingApprovals() int {
+	return max(0, r.Requires.Count-len(r.Requires.Approvers))
 }
 
 type RequiresResult struct {
