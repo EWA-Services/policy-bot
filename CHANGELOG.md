@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.41.1-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.43.0-finn.1...v1.41.1-finn.1) (2026-10-29)
+
+
+### Features
+
+* add pre-commit config and workflow for Go fork [DEV-2709] ([1e5aa7d](https://github.com/EWA-Services/policy-bot/commit/1e5aa7de409b2062e51a4b17b92dc6de0418171b))
+* add reviewable PR size gate template [ENG-1816] ([#751](https://github.com/EWA-Services/policy-bot/issues/751)) ([#23](https://github.com/EWA-Services/policy-bot/issues/23)) ([7b91539](https://github.com/EWA-Services/policy-bot/commit/7b91539629ba887cc4e2901db77abf04ae65efcf))
+* **handlers:** early-exit check_run/workflow_run when not policy-relevant [DEV-2709] ([ab82415](https://github.com/EWA-Services/policy-bot/commit/ab824155692a1269722e351eed6b8d024056ea9b))
+* **handlers:** early-exit check_run/workflow_run when not policy-relevant [DEV-2709] ([5ac4777](https://github.com/EWA-Services/policy-bot/commit/5ac47774c839206ea348e1095e92b0bf6cac521e))
+* **policy:** request one approver and one capability reviewer [ENG-3035] ([#992](https://github.com/EWA-Services/policy-bot/issues/992)) ([#45](https://github.com/EWA-Services/policy-bot/issues/45)) ([29e0bb6](https://github.com/EWA-Services/policy-bot/commit/29e0bb63859b543a2b0c87b94975a7e337e8d817))
+* pull EWA-Actions sync files [DEV-2709] ([6068465](https://github.com/EWA-Services/policy-bot/commit/6068465233851c4d1efd0295c8490746b9e6bbe6))
+* support rulesets rollout on fork [DEV-2709] ([e075586](https://github.com/EWA-Services/policy-bot/commit/e0755860265fd6ee486c5761f61204d67eb7843f))
+* wire EWA fork setup (release-please, sync, rulesets, pre-commit) [DEV-2709] ([0d7b6d4](https://github.com/EWA-Services/policy-bot/commit/0d7b6d45f7d743a4d6d60c74576e820d5784a63c))
+* wire release-please and upstream sync workflows [DEV-2709] ([02bbd6a](https://github.com/EWA-Services/policy-bot/commit/02bbd6a8f8e40d2c18d0df49b1c7a56fbdaa39b3))
+
+
+### Bug Fixes
+
+* allow release automation through public gate [ENG-1715] ([#21](https://github.com/EWA-Services/policy-bot/issues/21)) ([2028c19](https://github.com/EWA-Services/policy-bot/commit/2028c19796e5ef20b3a7f0927f7a37eb619958e1))
+* cache repository policy loads [ENG-1715] ([#17](https://github.com/EWA-Services/policy-bot/issues/17)) ([0bccfd3](https://github.com/EWA-Services/policy-bot/commit/0bccfd3f3f75080e3b5c7066366114a1ecef69bf))
+* **ci:** apply EWA-Actions[#350](https://github.com/EWA-Services/policy-bot/issues/350) pr-metadata-gate fix locally [DEV-2709] ([f2d37d2](https://github.com/EWA-Services/policy-bot/commit/f2d37d2395b443cf841020ef18c78b62c0058e88))
+* **ci:** point release.yml at develop, not main [DEV-2709] ([8c69950](https://github.com/EWA-Services/policy-bot/commit/8c699501d62c2a01b16c7597203e0b713193676b))
+* **ci:** point release.yml at develop, not main [DEV-2709] ([7b217e8](https://github.com/EWA-Services/policy-bot/commit/7b217e89d950d96c13b96107a60b73bea7dd25cd))
+* **deps:** go mod tidy after handler test imports [DEV-2709] ([b96959a](https://github.com/EWA-Services/policy-bot/commit/b96959aeebbc8ba8976b6f2c01141012265f76d9))
+* **handlers:** use workflow path, not display name, for workflow_run skip [DEV-2709] ([a4e58bb](https://github.com/EWA-Services/policy-bot/commit/a4e58bb9f1f2a560fff5b6b6f52caa608506cc27))
+* **handlers:** use workflow path, not display name, for workflow_run skip [DEV-2709] ([455f01f](https://github.com/EWA-Services/policy-bot/commit/455f01feb1c924cfdcf5b99dcc4ea0c365b379b5))
+* Reevaluate pending workflow requirements [ENG-1649] ([#62](https://github.com/EWA-Services/policy-bot/issues/62)) ([480907e](https://github.com/EWA-Services/policy-bot/commit/480907efe404fe6cdda12c756c2c748d8040f453))
+* Reevaluate PolicyBot when required checks change [ENG-1649] ([#55](https://github.com/EWA-Services/policy-bot/issues/55)) ([84e2b4e](https://github.com/EWA-Services/policy-bot/commit/84e2b4ed747d691546eb31bf1123e35c49c13959))
+* Sync upstream and keep FINN changes [ENG-3005] ([#42](https://github.com/EWA-Services/policy-bot/issues/42)) ([18b67f8](https://github.com/EWA-Services/policy-bot/commit/18b67f8888dbf5a6dec5829b4127757b36381a7d))
+
 ## [1.43.0-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.42.0-finn.1...v1.43.0-finn.1) (2026-10-29)
 
 
