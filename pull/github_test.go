@@ -809,20 +809,12 @@ func TestLatestWorkflowRunTransitions(t *testing.T) {
 				run := func(id int, status, result, event, updated string) map[string]interface{} {
 					return map[string]interface{}{"id": id, "run_number": id, "path": ".github/workflows/test.yml", "event": event, "status": status, "conclusion": result, "updated_at": updated}
 				}
-				// An older run finishing later must not hide a pending replacement.
-				body, err := json.Marshal(map[string]interface{}{"workflow_runs": []interface{}{
+				rp := workflowRunsResponsePlayer(t,
 					run(3, state, conclusion, "pull_request", "2026-10-23T00:00:01Z"),
 					run(2, "completed", "success", "pull_request", "2026-10-23T00:00:03Z"),
 					run(1, "completed", "failure", "pull_request", "2026-10-23T00:00:00Z"),
 					run(4, "completed", "success", "push", "2026-10-23T00:00:02Z"),
-				}})
-				require.NoError(t, err)
-				responses, err := json.Marshal([]interface{}{map[string]interface{}{"status": 200, "body": string(body)}})
-				require.NoError(t, err)
-				fixture := filepath.Join(t.TempDir(), "runs.yml")
-				require.NoError(t, os.WriteFile(fixture, responses, 0600))
-				rp := &ResponsePlayer{}
-				rp.AddRule(ExactPathMatcher("/repos/testorg/testrepo/actions/runs"), fixture)
+				)
 				ctx := makeContext(t, rp, nil, nil)
 				runs, err := ctx.LatestWorkflowRuns()
 				require.NoError(t, err)
@@ -838,36 +830,61 @@ func TestLatestWorkflowRunTransitions(t *testing.T) {
 
 func TestWorkflowWebhookOverridesStaleListing(t *testing.T) {
 	for _, tc := range []struct {
-		name, apiStatus, eventStatus, want string
-		apiAttempt, eventAttempt           int
-		sameHead                           bool
+		name, apiStatus, eventStatus, want         string
+		apiWorkflow, eventWorkflow, apiID, eventID int
+		apiRunNumber, eventRunNumber, apiAttempt   int
+		eventAttempt                               int
+		apiUpdated, eventUpdated                   time.Time
+		emptyListing                               bool
+		sameHead                                   bool
 	}{
-		{"pending webhook beats stale success", "completed", "in_progress", "pending", 1, 2, true},
-		{"old completed webhook cannot beat newer rerun", "in_progress", "completed", "pending", 2, 1, true},
-		{"completed webhook recovers pending listing", "in_progress", "completed", "success", 2, 2, true},
-		{"different head is ignored", "completed", "in_progress", "success", 1, 2, false},
+		{name: "pending webhook beats stale success", apiStatus: "completed", eventStatus: "in_progress", want: workflowRunPending, apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 2, sameHead: true},
+		{name: "old completed webhook cannot beat newer rerun", apiStatus: "in_progress", eventStatus: "completed", want: workflowRunPending, apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 2, eventAttempt: 1, sameHead: true},
+		{name: "completed webhook recovers pending listing", apiStatus: "in_progress", eventStatus: "completed", want: "success", apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 2, eventAttempt: 2, sameHead: true},
+		{name: "different head is ignored", apiStatus: "completed", eventStatus: "in_progress", want: "success", apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 2},
+		{name: "new workflow identity resets run number", apiStatus: "completed", eventStatus: "in_progress", want: workflowRunPending, apiWorkflow: 1, eventWorkflow: 2, apiID: 500, eventID: 501, apiRunNumber: 500, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 1, sameHead: true},
+		{name: "old workflow identity cannot beat replacement", apiStatus: "in_progress", eventStatus: "completed", want: workflowRunPending, apiWorkflow: 2, eventWorkflow: 1, apiID: 501, eventID: 500, apiRunNumber: 1, eventRunNumber: 500, apiAttempt: 1, eventAttempt: 1, sameHead: true},
+		{name: "terminal listing wins equal timestamp tie", apiStatus: "completed", eventStatus: "in_progress", want: "success", apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 1, sameHead: true},
+		{name: "older webhook timestamp cannot beat listing", apiStatus: "completed", eventStatus: "in_progress", want: "success", apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 1, apiUpdated: time.Date(2026, 10, 23, 0, 0, 1, 0, time.UTC), eventUpdated: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC), sameHead: true},
+		{name: "newer webhook timestamp wins", apiStatus: "completed", eventStatus: "in_progress", want: workflowRunPending, apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 1, apiUpdated: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC), eventUpdated: time.Date(2026, 10, 23, 0, 0, 1, 0, time.UTC), sameHead: true},
+		{name: "webhook fills empty listing", eventStatus: "in_progress", want: workflowRunPending, eventID: 1, eventRunNumber: 1, eventAttempt: 1, emptyListing: true, sameHead: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body, err := json.Marshal(map[string]interface{}{"workflow_runs": []interface{}{map[string]interface{}{
-				"id": 1, "path": ".github/workflows/ci.yml", "event": "pull_request", "status": tc.apiStatus, "conclusion": "success", "run_attempt": tc.apiAttempt, "updated_at": "2026-10-23T00:00:00Z",
-			}}})
-			require.NoError(t, err)
-			responses, err := json.Marshal([]interface{}{map[string]interface{}{"status": 200, "body": string(body)}})
-			require.NoError(t, err)
-			fixture := filepath.Join(t.TempDir(), "runs.yml")
-			require.NoError(t, os.WriteFile(fixture, responses, 0600))
-			rp := &ResponsePlayer{}
-			rp.AddRule(ExactPathMatcher("/repos/testorg/testrepo/actions/runs"), fixture)
+			if tc.apiUpdated.IsZero() {
+				tc.apiUpdated = time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+			}
+			if tc.eventUpdated.IsZero() {
+				tc.eventUpdated = tc.apiUpdated
+			}
+			rp := workflowRunsResponsePlayer(t)
+			if !tc.emptyListing {
+				rp = workflowRunsResponsePlayer(t, map[string]interface{}{
+					"workflow_id": tc.apiWorkflow, "id": tc.apiID, "run_number": tc.apiRunNumber, "path": ".github/workflows/ci.yml", "event": "pull_request", "status": tc.apiStatus, "conclusion": "success", "run_attempt": tc.apiAttempt, "updated_at": tc.apiUpdated.Format(time.RFC3339),
+				})
+			}
 			ctx := makeContext(t, rp, nil, nil).(*GitHubContext)
 			head := ctx.HeadSHA()
 			if !tc.sameHead {
 				head = "unrelated"
 			}
-			event := &github.WorkflowRun{ID: github.Ptr(int64(1)), Path: github.Ptr(".github/workflows/ci.yml"), Event: github.Ptr("pull_request"), HeadSHA: github.Ptr(head), Status: github.Ptr(tc.eventStatus), Conclusion: github.Ptr("success"), RunAttempt: github.Ptr(tc.eventAttempt), UpdatedAt: &github.Timestamp{Time: time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)}}
+			event := &github.WorkflowRun{WorkflowID: github.Ptr(int64(tc.eventWorkflow)), ID: github.Ptr(int64(tc.eventID)), RunNumber: github.Ptr(tc.eventRunNumber), Path: github.Ptr(".github/workflows/ci.yml"), Event: github.Ptr("pull_request"), HeadSHA: github.Ptr(head), Status: github.Ptr(tc.eventStatus), Conclusion: github.Ptr("success"), RunAttempt: github.Ptr(tc.eventAttempt), UpdatedAt: &github.Timestamp{Time: tc.eventUpdated}}
 			ctx.ctx = WithWorkflowRun(ctx.ctx, event)
 			runs, err := ctx.LatestWorkflowRuns()
 			require.NoError(t, err)
 			assert.Equal(t, []string{tc.want}, runs[".github/workflows/ci.yml"])
 		})
 	}
+}
+
+func workflowRunsResponsePlayer(t *testing.T, runs ...interface{}) *ResponsePlayer {
+	t.Helper()
+	body, err := json.Marshal(map[string]interface{}{"workflow_runs": runs})
+	require.NoError(t, err)
+	responses, err := json.Marshal([]interface{}{map[string]interface{}{"status": 200, "body": string(body)}})
+	require.NoError(t, err)
+	fixture := filepath.Join(t.TempDir(), "runs.yml")
+	require.NoError(t, os.WriteFile(fixture, responses, 0600))
+	rp := &ResponsePlayer{}
+	rp.AddRule(ExactPathMatcher("/repos/testorg/testrepo/actions/runs"), fixture)
+	return rp
 }
