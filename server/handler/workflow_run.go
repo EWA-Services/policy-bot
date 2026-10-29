@@ -25,6 +25,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+type workflowRunEvaluator func(context.Context, int64, common.Trigger, pull.Locator) error
+
 type WorkflowRun struct {
 	Base
 }
@@ -39,7 +41,13 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 		return errors.Wrap(err, "failed to parse workflow_run event payload")
 	}
 
-	if event.GetAction() != "completed" {
+	return h.processEvent(ctx, event, h.Evaluate)
+}
+
+func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRunEvent, evaluate workflowRunEvaluator) error {
+	switch event.GetAction() {
+	case "requested", "in_progress", "completed":
+	default:
 		return nil
 	}
 
@@ -59,9 +67,22 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 	installationID := githubapp.GetInstallationIDFromEvent(&event)
 
 	ctx, logger := githubapp.PrepareRepoContext(ctx, installationID, repo)
+	ctx = pull.WithWorkflowRun(ctx, workflowRun)
+
+	prs := workflowRun.PullRequests
+	if len(prs) == 0 && workflowRun.GetEvent() == "pull_request" {
+		client, err := h.NewInstallationClient(installationID)
+		if err != nil {
+			return err
+		}
+		prs, err = openPullRequestsForHead(ctx, client, ownerName, repoName, commitSHA)
+		if err != nil {
+			return err
+		}
+	}
 
 	evaluationFailures := 0
-	for _, pr := range event.GetWorkflowRun().PullRequests {
+	for _, pr := range prs {
 		// The `workflow_run` event includes pull requests that contain the SHA
 		// which is being checked. These can be pull requests _from_ our
 		// repository _to_ another one, for example if it's been forked and
@@ -91,7 +112,7 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 			continue
 		}
 
-		if err := h.Evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
+		if err := evaluate(ctx, installationID, common.TriggerStatus, pull.Locator{
 			Owner:  ownerName,
 			Repo:   repoName,
 			Number: pr.GetNumber(),
@@ -106,6 +127,26 @@ func (h *WorkflowRun) Handle(ctx context.Context, eventType, deliveryID string, 
 	}
 
 	return errors.Errorf("failed to evaluate %d pull requests", evaluationFailures)
+}
+
+func openPullRequestsForHead(ctx context.Context, client *github.Client, owner, repo, sha string) ([]*github.PullRequest, error) {
+	var pullRequests []*github.PullRequest
+	options := github.ListOptions{PerPage: 100}
+	for {
+		associated, response, err := client.PullRequests.ListPullRequestsWithCommit(ctx, owner, repo, sha, &options)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to find pull requests for workflow run")
+		}
+		for _, pullRequest := range associated {
+			if pullRequest.GetState() == "open" && pullRequest.GetHead().GetSHA() == sha {
+				pullRequests = append(pullRequests, pullRequest)
+			}
+		}
+		if response.NextPage == 0 {
+			return pullRequests, nil
+		}
+		options.Page = response.NextPage
+	}
 }
 
 // shouldSkipWorkflowRun returns true when we are confident that the policy on

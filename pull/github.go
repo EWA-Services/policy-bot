@@ -853,6 +853,19 @@ func (ghc *GitHubContext) getCheckStatuses() (map[string]string, error) {
 	return statuses, nil
 }
 
+type workflowRunEventKey struct{}
+
+func WithWorkflowRun(ctx context.Context, run *github.WorkflowRun) context.Context {
+	return context.WithValue(ctx, workflowRunEventKey{}, run)
+}
+
+func WorkflowRunFromContext(ctx context.Context) (*github.WorkflowRun, bool) {
+	run, ok := ctx.Value(workflowRunEventKey{}).(*github.WorkflowRun)
+	return run, ok
+}
+
+const workflowRunPending = "pending"
+
 func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 	if ghc.workflowRuns != nil {
 		return ghc.workflowRuns, nil
@@ -899,26 +912,7 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 		}
 
 		for _, run := range runs.WorkflowRuns {
-			if run.GetStatus() != "completed" {
-				continue
-			}
-
-			eventName := run.GetEvent()
-
-			previousRuns := runsWithDate[*run.Path]
-			if previousRuns == nil {
-				previousRuns = make(map[string]*github.WorkflowRun)
-				runsWithDate[*run.Path] = previousRuns
-			}
-
-			previousRun := previousRuns[eventName]
-
-			// This is an older run than one we've already saw, so ignore it.
-			if previousRun != nil && run.GetUpdatedAt().Before(previousRun.GetUpdatedAt().Time) {
-				continue
-			}
-
-			previousRuns[eventName] = run
+			keepNewestWorkflowRun(runsWithDate, run)
 		}
 
 		if resp.NextPage == 0 {
@@ -927,13 +921,52 @@ func (ghc *GitHubContext) LatestWorkflowRuns() (map[string][]string, error) {
 		opt.Page = resp.NextPage
 	}
 
+	if eventRun, ok := WorkflowRunFromContext(ghc.ctx); ok &&
+		eventRun.GetHeadSHA() == ghc.HeadSHA() && eventRun.GetPath() != "" {
+		keepNewestWorkflowRun(runsWithDate, eventRun)
+	}
+
 	ghc.workflowRuns = make(map[string][]string, len(runsWithDate))
 	for path, eventRuns := range runsWithDate {
 		for _, run := range eventRuns {
-			ghc.workflowRuns[path] = append(ghc.workflowRuns[path], run.GetConclusion())
+			conclusion := run.GetConclusion()
+			if run.GetStatus() != "completed" {
+				conclusion = workflowRunPending
+			}
+			ghc.workflowRuns[path] = append(ghc.workflowRuns[path], conclusion)
 		}
 	}
 	return ghc.workflowRuns, nil
+}
+
+func keepNewestWorkflowRun(runsByPath map[string]map[string]*github.WorkflowRun, run *github.WorkflowRun) {
+	path, event := run.GetPath(), run.GetEvent()
+	if runsByPath[path] == nil {
+		runsByPath[path] = make(map[string]*github.WorkflowRun)
+	}
+	previous := runsByPath[path][event]
+	if previous == nil || workflowRunAtLeastAsNew(run, previous) {
+		runsByPath[path][event] = run
+	}
+}
+
+func workflowRunAtLeastAsNew(run, previous *github.WorkflowRun) bool {
+	if run.GetWorkflowID() != previous.GetWorkflowID() {
+		return run.GetID() > previous.GetID()
+	}
+	if run.GetRunNumber() != previous.GetRunNumber() {
+		return run.GetRunNumber() > previous.GetRunNumber()
+	}
+	if run.GetID() != previous.GetID() {
+		return run.GetID() > previous.GetID()
+	}
+	if run.GetRunAttempt() != previous.GetRunAttempt() {
+		return run.GetRunAttempt() > previous.GetRunAttempt()
+	}
+	if !run.GetUpdatedAt().Time.Equal(previous.GetUpdatedAt().Time) {
+		return run.GetUpdatedAt().Time.After(previous.GetUpdatedAt().Time)
+	}
+	return run.GetStatus() == "completed" || previous.GetStatus() != "completed"
 }
 
 func (ghc *GitHubContext) Labels() ([]string, error) {
