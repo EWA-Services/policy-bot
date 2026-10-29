@@ -17,6 +17,7 @@ package reviewer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -213,6 +214,16 @@ func TestSelectRandomUsers(t *testing.T) {
 		expected := selectRandomUsers(count, users, rand.New(rand.NewSource(42)))
 		assert.Equal(t, expected, ordered[:count])
 	}
+
+	largeUserSet := make([]string, 128)
+	for index := range largeUserSet {
+		largeUserSet[index] = fmt.Sprintf("user-%d", index)
+	}
+	for seed := range 100 {
+		assert.NotPanics(t, func() {
+			assert.Len(t, randomlyOrderUsers(largeUserSet, rand.New(rand.NewSource(int64(seed)))), len(largeUserSet))
+		})
+	}
 }
 
 func TestSelectReviewers(t *testing.T) {
@@ -223,7 +234,6 @@ func TestSelectReviewers(t *testing.T) {
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
 				Users:          []string{"mhaypenny", "review-approver", "contributor-committer"},
-				RequiredCount:  2,
 				RequestedCount: 2,
 				Mode:           common.RequestModeRandomUsers,
 			},
@@ -233,7 +243,6 @@ func TestSelectReviewers(t *testing.T) {
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
 				Permissions:    []pull.Permission{pull.PermissionAdmin},
-				RequiredCount:  1,
 				RequestedCount: 1,
 				Mode:           common.RequestModeRandomUsers,
 			},
@@ -259,7 +268,6 @@ func TestSelectRequestedReviewers(t *testing.T) {
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
 				Users:          []string{"mhaypenny", "review-approver", "contributor-committer"},
-				RequiredCount:  1,
 				RequestedCount: 2,
 				Mode:           common.RequestModeRandomUsers,
 			},
@@ -321,7 +329,6 @@ func TestSelectReviewersAccountsForMaintainedApprovals(t *testing.T) {
 					},
 					ReviewRequestRule: &common.ReviewRequestRule{
 						Users:          users,
-						RequiredCount:  test.RequiredCount,
 						RequestedCount: test.RequestedCount,
 						Mode:           common.RequestModeRandomUsers,
 					},
@@ -346,7 +353,6 @@ func TestSelectReviewersKeepsSeededSelectionAfterApproval(t *testing.T) {
 		Requires: common.RequiresResult{Count: 2},
 		ReviewRequestRule: &common.ReviewRequestRule{
 			Users:          users,
-			RequiredCount:  2,
 			RequestedCount: 2,
 			Mode:           common.RequestModeRandomUsers,
 		},
@@ -356,10 +362,12 @@ func TestSelectReviewersKeepsSeededSelectionAfterApproval(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, first.Users, 2)
 
-	result.Requires.Approvers = []*common.Candidate{{User: first.Users[0]}}
-	second, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, rand.New(rand.NewSource(42)))
-	require.NoError(t, err)
-	assert.Equal(t, []string{first.Users[1]}, second.Users)
+	for approvedIndex := range first.Users {
+		result.Requires.Approvers = []*common.Candidate{{User: first.Users[approvedIndex]}}
+		second, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, rand.New(rand.NewSource(42)))
+		require.NoError(t, err)
+		assert.Equal(t, []string{first.Users[1-approvedIndex]}, second.Users)
+	}
 }
 
 func TestSelectAllUsersExcludesMaintainedApprovers(t *testing.T) {
@@ -394,9 +402,8 @@ func TestSelectTeamReviewersKeepsEligibleTeamForRemainingApprovals(t *testing.T)
 				},
 			},
 			ReviewRequestRule: &common.ReviewRequestRule{
-				Teams:         []string{"everyone/team-write"},
-				RequiredCount: 2,
-				Mode:          common.RequestModeTeams,
+				Teams: []string{"everyone/team-write"},
+				Mode:  common.RequestModeTeams,
 			},
 		},
 	}
@@ -414,7 +421,6 @@ func TestSelectReviewers_UserPermission(t *testing.T) {
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
 				Permissions:    []pull.Permission{pull.PermissionTriage, pull.PermissionMaintain},
-				RequiredCount:  2,
 				RequestedCount: 2,
 				Mode:           common.RequestModeAllUsers,
 			},
@@ -441,9 +447,8 @@ func TestSelectReviewers_TeamPermission(t *testing.T) {
 			Name:   "team-permissions",
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
-				Permissions:   []pull.Permission{pull.PermissionAdmin, pull.PermissionMaintain},
-				RequiredCount: 1,
-				Mode:          common.RequestModeTeams,
+				Permissions: []pull.Permission{pull.PermissionAdmin, pull.PermissionMaintain},
+				Mode:        common.RequestModeTeams,
 			},
 		},
 	}
@@ -467,7 +472,6 @@ func TestSelectReviewers_TeamMembers(t *testing.T) {
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
 				Teams:          []string{"everyone/team-write"},
-				RequiredCount:  1,
 				RequestedCount: 1,
 				Mode:           common.RequestModeRandomUsers,
 			},
@@ -489,10 +493,9 @@ func TestSelectReviewers_Team(t *testing.T) {
 			Name:   "Team",
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
-				Teams:         []string{"everyone/team-write", "everyone/team-not-collaborators"},
-				Users:         []string{"user-team-write"},
-				RequiredCount: 1,
-				Mode:          common.RequestModeTeams,
+				Teams: []string{"everyone/team-write", "everyone/team-not-collaborators"},
+				Users: []string{"user-team-write"},
+				Mode:  common.RequestModeTeams,
 			},
 		},
 	}
@@ -512,10 +515,9 @@ func TestSelectReviewers_TeamNotCollaborator(t *testing.T) {
 			Name:   "not-collaborators",
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
-				Teams:         []string{"everyone/team-not-collaborators"},
-				Users:         []string{"user-team-write"},
-				RequiredCount: 1,
-				Mode:          common.RequestModeTeams,
+				Teams: []string{"everyone/team-not-collaborators"},
+				Users: []string{"user-team-write"},
+				Mode:  common.RequestModeTeams,
 			},
 		},
 	}
@@ -535,7 +537,6 @@ func TestSelectReviewers_Org(t *testing.T) {
 			Status: common.StatusPending,
 			ReviewRequestRule: &common.ReviewRequestRule{
 				Organizations:  []string{"everyone"},
-				RequiredCount:  1,
 				RequestedCount: 1,
 				Mode:           common.RequestModeRandomUsers,
 			},

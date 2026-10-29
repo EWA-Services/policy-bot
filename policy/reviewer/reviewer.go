@@ -125,25 +125,28 @@ func selectRandomUsers(n int, users []string, r *rand.Rand) []string {
 	return selections
 }
 
-// randomlyOrderUsers returns a stable random priority order for users. A
-// partial prefix matches selectRandomUsers for the same random source.
 func randomlyOrderUsers(users []string, r *rand.Rand) []string {
 	if len(users) <= 1 {
 		return users
 	}
 
-	ordered := selectRandomUsers(len(users)-1, users, r)
-	selected := make(map[string]struct{}, len(ordered))
-	for _, user := range ordered {
-		selected[user] = struct{}{}
+	ordered := make([]string, 0, len(users))
+	selected := make(map[int]struct{}, len(users)-1)
+	for len(ordered) < len(users)-1 {
+		index := r.Intn(len(users))
+		if _, ok := selected[index]; ok {
+			continue
+		}
+		selected[index] = struct{}{}
+		ordered = append(ordered, users[index])
 	}
-	for _, user := range users {
-		if _, ok := selected[user]; !ok {
+	for index, user := range users {
+		if _, ok := selected[index]; !ok {
 			return append(ordered, user)
 		}
 	}
 
-	panic("failed to order all users")
+	return ordered
 }
 
 func withoutApprovers(users []string, approvers []*common.Candidate) []string {
