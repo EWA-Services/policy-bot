@@ -94,45 +94,14 @@ func FindRequests(result *common.Result) []*common.Result {
 	return reqs
 }
 
-// select n random values from the list of users without reuse
-func selectRandomUsers(n int, users []string, r *rand.Rand) []string {
-	var selections []string
-	if n == 0 {
-		return selections
-	}
-	if n >= len(users) {
-		return users
-	}
-
-	selected := make(map[int]bool)
-	for range n {
-		j := 0
-		for {
-			// Upper bound the number of attempts to uniquely select random users to n*5
-			if j > n*5 {
-				// We haven't been able to select a random value, bail loudly
-				panic(fmt.Sprintf("failed to select random value for %d %d", n, len(users)))
-			}
-			m := r.Intn(len(users))
-			if !selected[m] {
-				selected[m] = true
-				selections = append(selections, users[m])
-				break
-			}
-			j++
-		}
-	}
-	return selections
-}
-
 func randomlyOrderUsers(users []string, r *rand.Rand) []string {
 	if len(users) <= 1 {
 		return users
 	}
 
 	ordered := make([]string, 0, len(users))
-	selected := make(map[int]struct{}, len(users)-1)
-	for len(ordered) < len(users)-1 {
+	selected := make(map[int]struct{}, len(users))
+	for len(ordered) < len(users) {
 		index := r.Intn(len(users))
 		if _, ok := selected[index]; ok {
 			continue
@@ -140,12 +109,6 @@ func randomlyOrderUsers(users []string, r *rand.Rand) []string {
 		selected[index] = struct{}{}
 		ordered = append(ordered, users[index])
 	}
-	for index, user := range users {
-		if _, ok := selected[index]; !ok {
-			return append(ordered, user)
-		}
-	}
-
 	return ordered
 }
 

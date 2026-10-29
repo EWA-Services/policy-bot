@@ -17,7 +17,6 @@ package reviewer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"testing"
 
@@ -27,6 +26,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type repeatingSource struct {
+	repeats int
+	next    int64
+}
+
+func (s *repeatingSource) Int63() int64 {
+	if s.repeats > 0 {
+		s.repeats--
+		return 0
+	}
+	value := s.next
+	s.next++
+	return value << 32
+}
+
+func (s *repeatingSource) Seed(seed int64) {
+	s.repeats = int(seed)
+	s.next = 1
+}
 
 func TestFindRequests(t *testing.T) {
 	result := &common.Result{
@@ -192,38 +211,20 @@ func TestSelectionDifference(t *testing.T) {
 	}
 }
 
-func TestSelectRandomUsers(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
-
-	require.Len(t, selectRandomUsers(0, []string{"a"}, r), 0, "0 selection should return nothing")
-	require.Len(t, selectRandomUsers(1, []string{}, r), 0, "empty list should return nothing")
-
-	assert.Equal(t, []string{"a"}, selectRandomUsers(1, []string{"a"}, r))
-	assert.Equal(t, []string{"a", "b"}, selectRandomUsers(3, []string{"a", "b"}, r))
-
-	pseudoRandom := selectRandomUsers(1, []string{"a", "b", "c"}, r)
-	assert.Equal(t, []string{"c"}, pseudoRandom)
-
-	multiplePseudoRandom := selectRandomUsers(4, []string{"a", "b", "c", "d", "e", "f", "g"}, r)
-	assert.Equal(t, []string{"c", "e", "b", "f"}, multiplePseudoRandom)
+func TestRandomlyOrderUsers(t *testing.T) {
+	assert.Empty(t, randomlyOrderUsers(nil, rand.New(rand.NewSource(42))))
+	assert.Equal(t, []string{"a"}, randomlyOrderUsers([]string{"a"}, rand.New(rand.NewSource(42))))
 
 	users := []string{"a", "b", "c", "d", "e"}
 	ordered := randomlyOrderUsers(users, rand.New(rand.NewSource(42)))
 	assert.ElementsMatch(t, users, ordered)
-	for count := 1; count < len(users); count++ {
-		expected := selectRandomUsers(count, users, rand.New(rand.NewSource(42)))
-		assert.Equal(t, expected, ordered[:count])
-	}
+	assert.Equal(t, []string{"a", "c", "d", "b", "e"}, ordered)
 
-	largeUserSet := make([]string, 128)
-	for index := range largeUserSet {
-		largeUserSet[index] = fmt.Sprintf("user-%d", index)
-	}
-	for seed := range 100 {
-		assert.NotPanics(t, func() {
-			assert.Len(t, randomlyOrderUsers(largeUserSet, rand.New(rand.NewSource(int64(seed)))), len(largeUserSet))
-		})
-	}
+	repeating := &repeatingSource{}
+	repeating.Seed(600)
+	assert.NotPanics(t, func() {
+		assert.ElementsMatch(t, users, randomlyOrderUsers(users, rand.New(repeating)))
+	})
 }
 
 func TestSelectReviewers(t *testing.T) {
