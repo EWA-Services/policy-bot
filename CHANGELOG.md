@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.43.1-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.43.0-finn.1...v1.43.1-finn.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* Preserve approvals across reviewer requests [ENG-3388] ([#66](https://github.com/EWA-Services/policy-bot/issues/66)) ([4f65baf](https://github.com/EWA-Services/policy-bot/commit/4f65bafc2e4fcd7afcd31d38e77e9e2e39e5f1ee))
+
 ## [1.43.0-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.42.0-finn.1...v1.43.0-finn.1) (2026-10-29)
 
 
