@@ -291,7 +291,7 @@ func TestSelectReviewersExcludesMaintainedApprovers(t *testing.T) {
 	assert.Equal(t, []string{"contributor-committer"}, selection.Users)
 }
 
-func TestSelectTeamReviewersExcludesMaintainedApproverTeams(t *testing.T) {
+func TestSelectTeamReviewersKeepsEligibleTeamForRemainingApprovals(t *testing.T) {
 	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
@@ -300,11 +300,11 @@ func TestSelectTeamReviewersExcludesMaintainedApproverTeams(t *testing.T) {
 			Requires: common.RequiresResult{
 				Count: 2,
 				Approvers: []*common.Candidate{
-					{User: "review-approver", Teams: []string{"team-write"}},
+					{User: "review-approver"},
 				},
 			},
 			ReviewRequestRule: &common.ReviewRequestRule{
-				Teams:         []string{"everyone/team-write", "everyone/team-admin"},
+				Teams:         []string{"everyone/team-write"},
 				RequiredCount: 2,
 				Mode:          common.RequestModeTeams,
 			},
@@ -313,7 +313,7 @@ func TestSelectTeamReviewersExcludesMaintainedApproverTeams(t *testing.T) {
 
 	selection, err := SelectReviewers(context.Background(), makeContext(), results, r)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"team-admin"}, selection.Teams)
+	assert.Equal(t, []string{"team-write"}, selection.Teams)
 }
 
 func TestSelectReviewers_UserPermission(t *testing.T) {

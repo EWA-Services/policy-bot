@@ -102,7 +102,6 @@ type Candidate struct {
 	Type         CandidateType
 	ReviewID     string
 	User         string
-	Teams        []string
 	CreatedAt    time.Time
 	LastEditedAt time.Time
 }
@@ -168,7 +167,6 @@ func (m *Methods) Candidates(ctx context.Context, prctx pull.Context) ([]*Candid
 							Type:         ReviewCandidate,
 							ReviewID:     r.ID,
 							User:         r.Author,
-							Teams:        r.Teams,
 							CreatedAt:    r.CreatedAt,
 							LastEditedAt: r.LastEditedAt,
 						})
@@ -178,7 +176,6 @@ func (m *Methods) Candidates(ctx context.Context, prctx pull.Context) ([]*Candid
 						Type:         ReviewCandidate,
 						ReviewID:     r.ID,
 						User:         r.Author,
-						Teams:        r.Teams,
 						CreatedAt:    r.CreatedAt,
 						LastEditedAt: r.LastEditedAt,
 					})

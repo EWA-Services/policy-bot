@@ -196,12 +196,6 @@ func SelectReviewers(ctx context.Context, prctx pull.Context, results []*common.
 
 func selectTeamReviewers(ctx context.Context, prctx pull.Context, selection *Selection, result *common.Result) error {
 	logger := zerolog.Ctx(ctx)
-	approvedTeams := make(map[string]struct{})
-	for _, approver := range result.Requires.Approvers {
-		for _, team := range approver.Teams {
-			approvedTeams[team] = struct{}{}
-		}
-	}
 
 	eligibleTeams, err := prctx.Teams()
 	if err != nil {
@@ -210,9 +204,6 @@ func selectTeamReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 
 	var teams []string
 	for team, perm := range eligibleTeams {
-		if _, approved := approvedTeams[team]; approved {
-			continue
-		}
 		switch {
 		case requestsTeam(result, prctx.RepositoryOwner()+"/"+team):
 			teams = append(teams, team)
