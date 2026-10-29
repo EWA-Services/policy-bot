@@ -76,7 +76,8 @@ func (s Selection) IsEmpty() bool {
 	return len(s.Users) == 0 && len(s.Teams) == 0
 }
 
-// FindRequests returns all pending leaf results with review requests enabled.
+// FindRequests returns pending leaf results with review requests enabled that
+// still need more approvals.
 func FindRequests(result *common.Result) []*common.Result {
 	if result.Status != common.StatusPending {
 		return nil
@@ -87,7 +88,7 @@ func FindRequests(result *common.Result) []*common.Result {
 		reqs = append(reqs, FindRequests(c)...)
 	}
 	if len(result.Children) == 0 && result.ReviewRequestRule != nil && result.Error == nil &&
-		len(result.Requires.Approvers) < result.Requires.Count {
+		result.RemainingApprovals() > 0 {
 		reqs = append(reqs, result)
 	}
 	return reqs
@@ -124,6 +125,42 @@ func selectRandomUsers(n int, users []string, r *rand.Rand) []string {
 	return selections
 }
 
+// randomlyOrderUsers returns a stable random priority order for users. A
+// partial prefix matches selectRandomUsers for the same random source.
+func randomlyOrderUsers(users []string, r *rand.Rand) []string {
+	if len(users) <= 1 {
+		return users
+	}
+
+	ordered := selectRandomUsers(len(users)-1, users, r)
+	selected := make(map[string]struct{}, len(ordered))
+	for _, user := range ordered {
+		selected[user] = struct{}{}
+	}
+	for _, user := range users {
+		if _, ok := selected[user]; !ok {
+			return append(ordered, user)
+		}
+	}
+
+	panic("failed to order all users")
+}
+
+func withoutApprovers(users []string, approvers []*common.Candidate) []string {
+	approvedUsers := make(map[string]struct{}, len(approvers))
+	for _, approver := range approvers {
+		approvedUsers[approver.User] = struct{}{}
+	}
+
+	var remaining []string
+	for _, user := range users {
+		if _, approved := approvedUsers[user]; !approved {
+			remaining = append(remaining, user)
+		}
+	}
+	return remaining
+}
+
 func selectTeamMembers(prctx pull.Context, allTeams []string) (map[string][]string, error) {
 	allTeamsMembers := make(map[string][]string)
 	for _, team := range allTeams {
@@ -154,13 +191,11 @@ func getPossibleReviewers(
 	prctx pull.Context,
 	users map[string]struct{},
 	collaborators []*pull.Collaborator,
-	approvers map[string]struct{},
 ) []string {
 	var possibleReviewers []string
 	for _, c := range collaborators {
 		_, exists := users[c.Name]
-		_, alreadyApproved := approvers[c.Name]
-		if c.Name != prctx.Author() && exists && !alreadyApproved {
+		if c.Name != prctx.Author() && exists {
 			possibleReviewers = append(possibleReviewers, c.Name)
 		}
 	}
@@ -269,11 +304,7 @@ func selectUserReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 		}
 	}
 
-	approvers := make(map[string]struct{})
-	for _, approver := range result.Requires.Approvers {
-		approvers[approver.User] = struct{}{}
-	}
-	possibleReviewers := getPossibleReviewers(prctx, allUsers, collaborators, approvers)
+	possibleReviewers := getPossibleReviewers(prctx, allUsers, collaborators)
 	if len(possibleReviewers) == 0 {
 		logger.Debug().Msg("Found 0 eligible reviewers; skipping review request")
 		return nil
@@ -281,16 +312,23 @@ func selectUserReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 
 	switch result.ReviewRequestRule.Mode {
 	case common.RequestModeAllUsers:
-		logger.Debug().Msgf("Found %d eligible reviewers; selecting all", len(possibleReviewers))
-		selection.Users = append(selection.Users, possibleReviewers...)
+		remainingReviewers := withoutApprovers(possibleReviewers, result.Requires.Approvers)
+		logger.Debug().Msgf("Found %d eligible reviewers; selecting %d who have not approved", len(possibleReviewers), len(remainingReviewers))
+		selection.Users = append(selection.Users, remainingReviewers...)
 
 	case common.RequestModeRandomUsers:
-		remainingRequired := result.ReviewRequestRule.RequiredCount - len(result.Requires.Approvers)
-		count := min(result.ReviewRequestRule.RequestedCount, remainingRequired)
-		if result.ReviewRequestRule.RequestedCount >= result.ReviewRequestRule.RequiredCount {
-			count = max(0, result.ReviewRequestRule.RequestedCount-len(result.Requires.Approvers))
+		requestedCount := result.ReviewRequestRule.RequestedCount
+		requiredCount := result.Requires.Count
+		approvalCount := len(result.Requires.Approvers)
+		count := min(requestedCount, result.RemainingApprovals())
+		if requestedCount >= requiredCount {
+			count = max(0, requestedCount-approvalCount)
 		}
-		selectedUsers := selectRandomUsers(count, possibleReviewers, r)
+
+		orderedReviewers := randomlyOrderUsers(possibleReviewers, r)
+		remainingReviewers := withoutApprovers(orderedReviewers, result.Requires.Approvers)
+		count = min(count, len(remainingReviewers))
+		selectedUsers := remainingReviewers[:count]
 
 		logger.Debug().Msgf("Found %d eligible reviewers; randomly selecting %d", len(possibleReviewers), count)
 		selection.Users = append(selection.Users, selectedUsers...)

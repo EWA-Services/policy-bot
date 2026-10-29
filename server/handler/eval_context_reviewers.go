@@ -48,7 +48,7 @@ func (ec *EvalContext) requestReviewsForResult(ctx context.Context, trigger comm
 		return ec.requestReviews(ctx, reqs)
 	}
 
-	logger.Debug().Msgf("No pending rules have review requests enabled, skipping reviewer assignment")
+	logger.Debug().Msg("No pending rules need additional reviewers, skipping reviewer assignment")
 	return nil
 }
 

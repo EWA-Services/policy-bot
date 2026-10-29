@@ -82,6 +82,12 @@ type Result struct {
 	Children []*Result
 }
 
+// RemainingApprovals returns the number of additional approvals needed by the
+// result.
+func (r *Result) RemainingApprovals() int {
+	return max(0, r.Requires.Count-len(r.Requires.Approvers))
+}
+
 type RequiresResult struct {
 	// Count is the number of required approvals from Actors
 	// Actors is the set of actors allowed to approve
