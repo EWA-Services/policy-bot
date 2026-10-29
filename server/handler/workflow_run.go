@@ -75,19 +75,9 @@ func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRun
 		if err != nil {
 			return err
 		}
-		for page := 1; ; page++ {
-			associated, response, err := client.PullRequests.ListPullRequestsWithCommit(ctx, ownerName, repoName, commitSHA, &github.ListOptions{PerPage: 100, Page: page})
-			if err != nil {
-				return errors.Wrap(err, "failed to find pull requests for workflow run")
-			}
-			for _, pr := range associated {
-				if pr.GetState() == "open" && pr.GetHead().GetSHA() == commitSHA {
-					prs = append(prs, pr)
-				}
-			}
-			if response.NextPage == 0 {
-				break
-			}
+		prs, err = openPullRequestsForHead(ctx, client, ownerName, repoName, commitSHA)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -137,6 +127,26 @@ func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRun
 	}
 
 	return errors.Errorf("failed to evaluate %d pull requests", evaluationFailures)
+}
+
+func openPullRequestsForHead(ctx context.Context, client *github.Client, owner, repo, sha string) ([]*github.PullRequest, error) {
+	var pullRequests []*github.PullRequest
+	options := github.ListOptions{PerPage: 100}
+	for {
+		associated, response, err := client.PullRequests.ListPullRequestsWithCommit(ctx, owner, repo, sha, &options)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to find pull requests for workflow run")
+		}
+		for _, pullRequest := range associated {
+			if pullRequest.GetState() == "open" && pullRequest.GetHead().GetSHA() == sha {
+				pullRequests = append(pullRequests, pullRequest)
+			}
+		}
+		if response.NextPage == 0 {
+			return pullRequests, nil
+		}
+		options.Page = response.NextPage
+	}
 }
 
 // shouldSkipWorkflowRun returns true when we are confident that the policy on

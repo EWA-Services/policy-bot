@@ -839,6 +839,7 @@ func TestWorkflowWebhookOverridesStaleListing(t *testing.T) {
 		sameHead                                   bool
 	}{
 		{name: "pending webhook beats stale success", apiStatus: "completed", eventStatus: "in_progress", want: workflowRunPending, apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 2, sameHead: true},
+		{name: "new execution beats stale success", apiStatus: "completed", eventStatus: "in_progress", want: workflowRunPending, apiWorkflow: 1, eventWorkflow: 1, apiID: 1, eventID: 2, apiRunNumber: 1, eventRunNumber: 2, apiAttempt: 1, eventAttempt: 1, sameHead: true},
 		{name: "old completed webhook cannot beat newer rerun", apiStatus: "in_progress", eventStatus: "completed", want: workflowRunPending, apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 2, eventAttempt: 1, sameHead: true},
 		{name: "completed webhook recovers pending listing", apiStatus: "in_progress", eventStatus: "completed", want: "success", apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 2, eventAttempt: 2, sameHead: true},
 		{name: "different head is ignored", apiStatus: "completed", eventStatus: "in_progress", want: "success", apiID: 1, eventID: 1, apiRunNumber: 1, eventRunNumber: 1, apiAttempt: 1, eventAttempt: 2},
