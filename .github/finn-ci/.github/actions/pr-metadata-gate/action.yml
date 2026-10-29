@@ -188,7 +188,7 @@ runs:
       env:
         HOME: ${{ runner.temp }}/codex-home
         PR_NUMBER: ${{ steps.determine.outputs.pr_number }}
-        CODEX_MODEL: gpt-5.5
+        CODEX_MODEL: gpt-6.1-sol
         CODEX_REASONING_EFFORT: xhigh
         PROMPT_FILE: ${{ steps.codex-prompt.outputs.prompt_file }}
         RUNNER_TEMP: ${{ runner.temp }}
