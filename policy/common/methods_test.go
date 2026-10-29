@@ -70,6 +70,7 @@ func TestCandidates(t *testing.T) {
 				CreatedAt: now.Add(5 * time.Minute),
 				Author:    "ttest",
 				State:     pull.ReviewApproved,
+				Teams:     []string{"team-reviewers"},
 			},
 			{
 				CreatedAt: now.Add(7 * time.Minute),
@@ -169,6 +170,7 @@ func TestCandidates(t *testing.T) {
 		require.Len(t, cs, 4, "incorrect number of candidates found")
 		assert.Equal(t, "mhaypenny", cs[0].User)
 		assert.Equal(t, "ttest", cs[1].User)
+		assert.Equal(t, []string{"team-reviewers"}, cs[1].Teams)
 		assert.Equal(t, "santaclaus", cs[2].User)
 		assert.Equal(t, "dasherdancer", cs[3].User)
 	})

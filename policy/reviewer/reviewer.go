@@ -86,7 +86,8 @@ func FindRequests(result *common.Result) []*common.Result {
 	for _, c := range result.Children {
 		reqs = append(reqs, FindRequests(c)...)
 	}
-	if len(result.Children) == 0 && result.ReviewRequestRule != nil && result.Error == nil {
+	if len(result.Children) == 0 && result.ReviewRequestRule != nil && result.Error == nil &&
+		len(result.Requires.Approvers) < result.Requires.Count {
 		reqs = append(reqs, result)
 	}
 	return reqs
@@ -149,11 +150,17 @@ func selectOrgMembers(prctx pull.Context, allOrgs []string) ([]string, error) {
 	return allOrgsMembers, nil
 }
 
-func getPossibleReviewers(prctx pull.Context, users map[string]struct{}, collaborators []*pull.Collaborator) []string {
+func getPossibleReviewers(
+	prctx pull.Context,
+	users map[string]struct{},
+	collaborators []*pull.Collaborator,
+	approvers map[string]struct{},
+) []string {
 	var possibleReviewers []string
 	for _, c := range collaborators {
 		_, exists := users[c.Name]
-		if c.Name != prctx.Author() && exists {
+		_, alreadyApproved := approvers[c.Name]
+		if c.Name != prctx.Author() && exists && !alreadyApproved {
 			possibleReviewers = append(possibleReviewers, c.Name)
 		}
 	}
@@ -189,6 +196,12 @@ func SelectReviewers(ctx context.Context, prctx pull.Context, results []*common.
 
 func selectTeamReviewers(ctx context.Context, prctx pull.Context, selection *Selection, result *common.Result) error {
 	logger := zerolog.Ctx(ctx)
+	approvedTeams := make(map[string]struct{})
+	for _, approver := range result.Requires.Approvers {
+		for _, team := range approver.Teams {
+			approvedTeams[team] = struct{}{}
+		}
+	}
 
 	eligibleTeams, err := prctx.Teams()
 	if err != nil {
@@ -197,6 +210,9 @@ func selectTeamReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 
 	var teams []string
 	for team, perm := range eligibleTeams {
+		if _, approved := approvedTeams[team]; approved {
+			continue
+		}
 		switch {
 		case requestsTeam(result, prctx.RepositoryOwner()+"/"+team):
 			teams = append(teams, team)
@@ -262,7 +278,11 @@ func selectUserReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 		}
 	}
 
-	possibleReviewers := getPossibleReviewers(prctx, allUsers, collaborators)
+	approvers := make(map[string]struct{})
+	for _, approver := range result.Requires.Approvers {
+		approvers[approver.User] = struct{}{}
+	}
+	possibleReviewers := getPossibleReviewers(prctx, allUsers, collaborators, approvers)
 	if len(possibleReviewers) == 0 {
 		logger.Debug().Msg("Found 0 eligible reviewers; skipping review request")
 		return nil
@@ -274,7 +294,11 @@ func selectUserReviewers(ctx context.Context, prctx pull.Context, selection *Sel
 		selection.Users = append(selection.Users, possibleReviewers...)
 
 	case common.RequestModeRandomUsers:
-		count := result.ReviewRequestRule.RequestedCount
+		remainingRequired := result.ReviewRequestRule.RequiredCount - len(result.Requires.Approvers)
+		count := min(result.ReviewRequestRule.RequestedCount, remainingRequired)
+		if result.ReviewRequestRule.RequestedCount >= result.ReviewRequestRule.RequiredCount {
+			count = max(0, result.ReviewRequestRule.RequestedCount-len(result.Requires.Approvers))
+		}
 		selectedUsers := selectRandomUsers(count, possibleReviewers, r)
 
 		logger.Debug().Msgf("Found %d eligible reviewers; randomly selecting %d", len(possibleReviewers), count)

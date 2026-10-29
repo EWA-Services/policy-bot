@@ -803,6 +803,72 @@ func TestIsApproved(t *testing.T) {
 	})
 }
 
+func TestInvalidateOnPushAppliesToAllApprovalReviews(t *testing.T) {
+	now := time.Now()
+	githubReview := true
+	prctx := &pulltest.Context{
+		AuthorValue:  "poom",
+		HeadSHAValue: "new-head",
+		CommitsValue: []*pull.Commit{
+			{
+				SHA:       "new-head",
+				Author:    "poom",
+				Committer: "poom",
+			},
+		},
+		PushedAtValue: map[string]time.Time{
+			"new-head": now,
+		},
+		ReviewsValue: []*pull.Review{
+			{
+				ID:        "jai-review",
+				CreatedAt: now.Add(-2 * time.Minute),
+				Author:    "jai",
+				State:     pull.ReviewApproved,
+			},
+			{
+				ID:        "maksim-review",
+				CreatedAt: now.Add(-time.Minute),
+				Author:    "maksim",
+				State:     pull.ReviewApproved,
+			},
+		},
+	}
+
+	rule := &Rule{
+		Options: Options{
+			Methods: &common.Methods{GithubReview: &githubReview},
+		},
+		Requires: Requires{
+			Count: 1,
+			Actors: common.Actors{
+				Users: []string{"jai"},
+			},
+		},
+	}
+
+	candidates, dismissals, err := rule.FilteredCandidates(context.Background(), prctx)
+	require.NoError(t, err)
+	require.Len(t, candidates, 2)
+	require.Empty(t, dismissals)
+
+	approved, result, err := rule.IsApproved(context.Background(), prctx, candidates)
+	require.NoError(t, err)
+	require.True(t, approved)
+	require.Len(t, result.Approvers, 1)
+	assert.Equal(t, "jai", result.Approvers[0].User)
+
+	rule.Options.InvalidateOnPush = new(true)
+	candidates, dismissals, err = rule.FilteredCandidates(context.Background(), prctx)
+	require.NoError(t, err)
+	require.Empty(t, candidates)
+	require.Len(t, dismissals, 2)
+	assert.ElementsMatch(t, []string{"jai-review", "maksim-review"}, []string{
+		dismissals[0].Candidate.ReviewID,
+		dismissals[1].Candidate.ReviewID,
+	})
+}
+
 func TestTrigger(t *testing.T) {
 	t.Run("triggerCommitOnRules", func(t *testing.T) {
 		r := &Rule{

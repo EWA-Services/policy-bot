@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFindLeafResults(t *testing.T) {
+func TestFindRequests(t *testing.T) {
 	result := &common.Result{
 		Name:   "Parent",
 		Status: common.StatusPending,
@@ -35,6 +35,7 @@ func TestFindLeafResults(t *testing.T) {
 			{
 				Name:              "One",
 				Status:            common.StatusPending,
+				Requires:          common.RequiresResult{Count: 1},
 				ReviewRequestRule: &common.ReviewRequestRule{},
 			},
 			{
@@ -58,11 +59,28 @@ func TestFindLeafResults(t *testing.T) {
 				Status: common.StatusPending,
 				Children: []*common.Result{
 					{
-						Name:              "Three",
-						Status:            common.StatusPending,
+						Name:   "Three",
+						Status: common.StatusPending,
+						Requires: common.RequiresResult{
+							Count: 2,
+							Approvers: []*common.Candidate{
+								{User: "jai"},
+							},
+						},
 						ReviewRequestRule: &common.ReviewRequestRule{},
 					},
 				},
+			},
+			{
+				Name:   "Approval complete, conditions pending",
+				Status: common.StatusPending,
+				Requires: common.RequiresResult{
+					Count: 1,
+					Approvers: []*common.Candidate{
+						{User: "jai"},
+					},
+				},
+				ReviewRequestRule: &common.ReviewRequestRule{},
 			},
 		},
 	}
@@ -245,6 +263,57 @@ func TestSelectRequestedReviewers(t *testing.T) {
 	require.NotContains(t, selection.Users, "mhaypenny", "the author cannot be requested")
 	require.NotContains(t, selection.Users, "not-a-collaborator", "a non collaborator cannot be requested")
 	require.NotContains(t, selection.Users, "org-owner", "org-owner should not be requested")
+}
+
+func TestSelectReviewersExcludesMaintainedApprovers(t *testing.T) {
+	r := rand.New(rand.NewSource(42))
+	results := []*common.Result{
+		{
+			Name:   "partially approved users",
+			Status: common.StatusPending,
+			Requires: common.RequiresResult{
+				Count: 2,
+				Approvers: []*common.Candidate{
+					{User: "review-approver"},
+				},
+			},
+			ReviewRequestRule: &common.ReviewRequestRule{
+				Users:          []string{"review-approver", "contributor-committer"},
+				RequiredCount:  2,
+				RequestedCount: 2,
+				Mode:           common.RequestModeRandomUsers,
+			},
+		},
+	}
+
+	selection, err := SelectReviewers(context.Background(), makeContext(), results, r)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"contributor-committer"}, selection.Users)
+}
+
+func TestSelectTeamReviewersExcludesMaintainedApproverTeams(t *testing.T) {
+	r := rand.New(rand.NewSource(42))
+	results := []*common.Result{
+		{
+			Name:   "partially approved teams",
+			Status: common.StatusPending,
+			Requires: common.RequiresResult{
+				Count: 2,
+				Approvers: []*common.Candidate{
+					{User: "review-approver", Teams: []string{"team-write"}},
+				},
+			},
+			ReviewRequestRule: &common.ReviewRequestRule{
+				Teams:         []string{"everyone/team-write", "everyone/team-admin"},
+				RequiredCount: 2,
+				Mode:          common.RequestModeTeams,
+			},
+		},
+	}
+
+	selection, err := SelectReviewers(context.Background(), makeContext(), results, r)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"team-admin"}, selection.Teams)
 }
 
 func TestSelectReviewers_UserPermission(t *testing.T) {
