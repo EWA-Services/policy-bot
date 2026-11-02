@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	stderrors "errors"
 	"math/rand"
 	"slices"
 
@@ -72,14 +71,23 @@ func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result
 }
 
 func (ec *EvalContext) reconcileReviewRequests(ctx context.Context, selection reviewer.Selection) error {
-	const maxAttempts = 2
-
 	logger := zerolog.Ctx(ctx)
+	if ec.ReviewerRequests == nil {
+		return errors.New("reviewer request coordinator is not configured")
+	}
+
+	lease := ec.ReviewerRequests.Lock(
+		ec.PullContext.RepositoryOwner(),
+		ec.PullContext.RepositoryName(),
+		ec.PullContext.Number(),
+	)
+	defer lease.Unlock()
 
 	blockers, err := ec.PullContext.ReviewerAssignmentBlockers()
 	if err != nil {
 		return errors.Wrap(err, "failed to read reviewer assignment blockers")
 	}
+	blockers = append(blockers, lease.Blockers()...)
 
 	missing := selection.Difference(blockers)
 	if missing.IsEmpty() {
@@ -87,36 +95,13 @@ func (ec *EvalContext) reconcileReviewRequests(ctx context.Context, selection re
 		return nil
 	}
 
-	var requestErrs []error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		requestErr := ec.requestReviewers(ctx, missing)
-		if requestErr == nil {
-			return nil
-		}
-		requestErrs = append(requestErrs, errors.Wrapf(requestErr, "reviewer request attempt %d failed", attempt))
-
-		blockers, blockersErr := ec.PullContext.ReviewerAssignmentBlockers()
-		if blockersErr != nil {
-			return stderrors.Join(append(
-				requestErrs,
-				errors.Wrap(blockersErr, "failed to reconcile reviewer assignment blockers"),
-			)...)
-		}
-
-		remaining := selection.Difference(blockers)
-		if remaining.IsEmpty() {
-			logger.Warn().Err(stderrors.Join(requestErrs...)).
-				Strs("users", missing.Users).
-				Strs("teams", missing.Teams).
-				Msg("Reviewer request failed, but GitHub shows all selected reviewers were assigned")
-			return nil
-		}
-		if reviewerSelectionSize(remaining) >= reviewerSelectionSize(missing) {
-			return stderrors.Join(requestErrs...)
-		}
-		missing = remaining
+	// Record the attempt before the mutation so another evaluation cannot replay
+	// an assignment whose response was lost after GitHub applied it.
+	lease.MarkAssigned(missing)
+	if err := ec.requestReviewers(ctx, missing); err != nil {
+		return errors.Wrap(err, "failed to request reviewers")
 	}
-	return stderrors.Join(requestErrs...)
+	return nil
 }
 
 func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.Selection) error {
@@ -134,10 +119,6 @@ func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.
 		req,
 	)
 	return err
-}
-
-func reviewerSelectionSize(selection reviewer.Selection) int {
-	return len(selection.Users) + len(selection.Teams)
 }
 
 func selectionToReviewersRequest(s reviewer.Selection) github.ReviewersRequest {

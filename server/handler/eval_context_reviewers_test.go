@@ -42,7 +42,7 @@ func TestReconcileReviewRequestsDoesNotRequestReviewerWhoReviewedDuringEvaluatio
 	})
 	client, requests := newReviewerRequestClient(t)
 
-	ec := &EvalContext{Client: client, PullContext: prctx}
+	ec := newReviewerEvalContext(client, prctx)
 	err = ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"late-approver"}})
 
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestReconcileReviewRequestsPostsMissingReviewers(t *testing.T) {
 	prctx := newReviewerBlockerContext(nil)
 	client, requests := newReviewerRequestClient(t, http.StatusCreated)
 
-	ec := &EvalContext{Client: client, PullContext: prctx}
+	ec := newReviewerEvalContext(client, prctx)
 	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{
 		Users: []string{"zoe", "amy", "amy"},
 		Teams: []string{"beta", "alpha", "alpha"},
@@ -71,80 +71,50 @@ func TestReconcileReviewRequestsPostsMissingReviewers(t *testing.T) {
 	}}, requests.all())
 }
 
-func TestReconcileReviewRequestsConvergesAfterConcurrentRequest(t *testing.T) {
-	desiredHistory := []*pull.Reviewer{
-		{Type: pull.ReviewerUser, Name: "amy"},
-		{Type: pull.ReviewerTeam, Name: "platform"},
+func TestReconcileReviewRequestsUsesCoordinatorLedgerAcrossEvaluations(t *testing.T) {
+	tests := map[string]struct {
+		status        int
+		firstHasError bool
+	}{
+		"successful request": {status: http.StatusCreated},
+		"uncertain request":  {status: http.StatusInternalServerError, firstHasError: true},
 	}
-	prctx := newReviewerBlockerContext(nil, desiredHistory)
-	client, requests := newReviewerRequestClient(t, http.StatusUnprocessableEntity)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			coordinator := NewReviewerRequestCoordinator()
+			client, requests := newReviewerRequestClient(t, test.status)
+			selection := reviewer.Selection{Users: []string{"amy"}}
 
-	ec := &EvalContext{Client: client, PullContext: prctx}
-	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{
-		Users: []string{"amy"},
-		Teams: []string{"platform"},
-	})
+			first := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
+			first.ReviewerRequests = coordinator
+			firstError := first.reconcileReviewRequests(context.Background(), selection)
+			if test.firstHasError {
+				require.Error(t, firstError)
+			} else {
+				require.NoError(t, firstError)
+			}
 
-	require.NoError(t, err)
-	assert.Len(t, requests.all(), 1)
-	assert.Equal(t, 2, prctx.calls)
+			second := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
+			second.ReviewerRequests = coordinator
+			require.NoError(t, second.reconcileReviewRequests(context.Background(), selection))
+
+			assert.Len(t, requests.all(), 1)
+		})
+	}
 }
 
-func TestReconcileReviewRequestsRetriesPartialProgress(t *testing.T) {
-	prctx := newReviewerBlockerContext(
-		nil,
-		[]*pull.Reviewer{{Type: pull.ReviewerUser, Name: "amy"}},
-		[]*pull.Reviewer{
-			{Type: pull.ReviewerUser, Name: "amy"},
-			{Type: pull.ReviewerUser, Name: "zoe"},
-		},
-	)
-	client, requests := newReviewerRequestClient(
-		t,
-		http.StatusUnprocessableEntity,
-		http.StatusUnprocessableEntity,
-	)
-
-	ec := &EvalContext{Client: client, PullContext: prctx}
-	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"amy", "zoe"}})
-
-	require.NoError(t, err)
-	require.Len(t, requests.all(), 2)
-	assert.Equal(t, []string{"amy", "zoe"}, requests.all()[0].Body.Reviewers)
-	assert.Equal(t, []string{"zoe"}, requests.all()[1].Body.Reviewers)
-	assert.Equal(t, 3, prctx.calls)
-}
-
-func TestReconcileReviewRequestsReturnsOriginalErrorWithoutProgress(t *testing.T) {
-	prctx := newReviewerBlockerContext(nil, nil)
+func TestReconcileReviewRequestsReturnsRequestError(t *testing.T) {
+	prctx := newReviewerBlockerContext(nil)
 	client, requests := newReviewerRequestClient(t, http.StatusUnprocessableEntity)
 
-	ec := &EvalContext{Client: client, PullContext: prctx}
+	ec := newReviewerEvalContext(client, prctx)
 	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"amy"}})
 
 	var githubError *github.ErrorResponse
 	require.ErrorAs(t, err, &githubError)
 	assert.Equal(t, "request failed 1", githubError.Message)
 	assert.Len(t, requests.all(), 1)
-	assert.Equal(t, 2, prctx.calls)
-}
-
-func TestReconcileReviewRequestsRetainsRequestAndReadErrors(t *testing.T) {
-	blockersError := stderrors.New("reviewer blockers unavailable")
-	prctx := newReviewerBlockerResultContext(
-		reviewerBlockerResult{},
-		reviewerBlockerResult{err: blockersError},
-	)
-	client, requests := newReviewerRequestClient(t, http.StatusUnprocessableEntity)
-
-	ec := &EvalContext{Client: client, PullContext: prctx}
-	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"amy"}})
-
-	var githubError *github.ErrorResponse
-	require.ErrorAs(t, err, &githubError)
-	assert.Equal(t, "request failed 1", githubError.Message)
-	assert.ErrorIs(t, err, blockersError)
-	assert.Len(t, requests.all(), 1)
+	assert.Equal(t, 1, prctx.calls)
 }
 
 func TestReconcileReviewRequestsFailsClosedOnInitialReadError(t *testing.T) {
@@ -152,7 +122,7 @@ func TestReconcileReviewRequestsFailsClosedOnInitialReadError(t *testing.T) {
 	prctx := newReviewerBlockerResultContext(reviewerBlockerResult{err: blockersError})
 	client, requests := newReviewerRequestClient(t, http.StatusCreated)
 
-	ec := &EvalContext{Client: client, PullContext: prctx}
+	ec := newReviewerEvalContext(client, prctx)
 	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"amy"}})
 
 	assert.ErrorIs(t, err, blockersError)
@@ -163,6 +133,14 @@ type reviewerBlockerContext struct {
 	*pulltest.Context
 	results []reviewerBlockerResult
 	calls   int
+}
+
+func newReviewerEvalContext(client *github.Client, prctx pull.Context) *EvalContext {
+	return &EvalContext{
+		Client:           client,
+		PullContext:      prctx,
+		ReviewerRequests: NewReviewerRequestCoordinator(),
+	}
 }
 
 type reviewerBlockerResult struct {

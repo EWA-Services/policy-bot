@@ -1,0 +1,84 @@
+- status: 200
+  body: |
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "headRefOid": "head",
+            "reviewRequests": {
+              "pageInfo": {"endCursor": "request-1", "hasNextPage": true},
+              "nodes": [{"requestedReviewer": {"__typename": "User", "login": "request-page-1"}}]
+            },
+            "timelineItems": {
+              "pageInfo": {"endCursor": "timeline-1", "hasNextPage": false},
+              "nodes": [{
+                "__typename": "ReviewRequestedEvent",
+                "requestedReviewer": {"__typename": "User", "login": "timeline-page-1"}
+              }]
+            },
+            "reviews": {
+              "pageInfo": {"endCursor": "review-1", "hasNextPage": true},
+              "nodes": [{
+                "author": {"login": "review-page-1"},
+                "commit": {"oid": "head"},
+                "onBehalfOf": {"nodes": []}
+              }]
+            }
+          }
+        }
+      }
+    }
+- status: 200
+  body: |
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "headRefOid": "head",
+            "reviewRequests": {
+              "pageInfo": {"endCursor": "request-2", "hasNextPage": false},
+              "nodes": [{"requestedReviewer": {"__typename": "User", "login": "request-page-2"}}]
+            },
+            "timelineItems": {
+              "pageInfo": {"endCursor": null, "hasNextPage": false},
+              "nodes": []
+            },
+            "reviews": {
+              "pageInfo": {"endCursor": "review-2", "hasNextPage": true},
+              "nodes": [{
+                "author": {"login": "review-page-2"},
+                "commit": {"oid": "head"},
+                "onBehalfOf": {"nodes": []}
+              }]
+            }
+          }
+        }
+      }
+    }
+- status: 200
+  body: |
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "headRefOid": "head",
+            "reviewRequests": {
+              "pageInfo": {"endCursor": null, "hasNextPage": false},
+              "nodes": []
+            },
+            "timelineItems": {
+              "pageInfo": {"endCursor": null, "hasNextPage": false},
+              "nodes": []
+            },
+            "reviews": {
+              "pageInfo": {"endCursor": "review-3", "hasNextPage": false},
+              "nodes": [{
+                "author": {"login": "review-page-3"},
+                "commit": {"oid": "head"},
+                "onBehalfOf": {"nodes": []}
+              }]
+            }
+          }
+        }
+      }
+    }
