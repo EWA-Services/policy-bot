@@ -104,7 +104,7 @@ func (ec *EvalContext) requestMissingReviews(ctx context.Context, selection revi
 	// any reviews on the head commit in the set of existing reviewers to avoid
 	// re-requesting them until the content changes.
 	head := ec.PullContext.HeadSHA()
-	reviews, err := ec.PullContext.Reviews()
+	reviews, err := ec.PullContext.CurrentReviews()
 	if err != nil {
 		return err
 	}

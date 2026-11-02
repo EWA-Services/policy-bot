@@ -164,8 +164,12 @@ func TestCommits(t *testing.T) {
 func TestReviews(t *testing.T) {
 	rp := &ResponsePlayer{}
 	dataRule := rp.AddRule(
-		GraphQLNodePrefixMatcher("repository.pullRequest.reviews"),
+		GraphQLNodePrefixMatcher("repository.pullRequest.commits"),
 		"testdata/responses/pull_commits_comments_reviews.yml",
+	)
+	currentReviewsRule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.reviews"),
+		"testdata/responses/pull_current_reviews.yml",
 	)
 
 	ctx := makeContext(t, rp, nil, nil)
@@ -203,6 +207,13 @@ func TestReviews(t *testing.T) {
 
 	require.Len(t, reviews, 3, "incorrect number of reviews")
 	assert.Equal(t, 2, dataRule.Count, "cached reviews were not used")
+
+	reviews, err = ctx.CurrentReviews()
+	require.NoError(t, err)
+
+	require.Len(t, reviews, 1, "incorrect number of current reviews")
+	assert.Equal(t, "late-approver", reviews[0].Author)
+	assert.Equal(t, 1, currentReviewsRule.Count, "current reviews were not freshly loaded")
 }
 
 func TestNoReviews(t *testing.T) {

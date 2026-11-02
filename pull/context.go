@@ -108,6 +108,9 @@ type Context interface {
 	// implementation dependent.
 	Reviews() ([]*Review, error)
 
+	// CurrentReviews lists reviews without using the evaluation cache.
+	CurrentReviews() ([]*Review, error)
+
 	// IsDraft returns the draft status of the Pull Request.
 	IsDraft() bool
 

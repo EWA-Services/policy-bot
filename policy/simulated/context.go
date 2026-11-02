@@ -77,7 +77,14 @@ func (c *Context) addApprovalComment(comments []*pull.Comment) []*pull.Comment {
 }
 
 func (c *Context) Reviews() ([]*pull.Review, error) {
-	reviews, err := c.Context.Reviews()
+	return c.applyReviewOptions(c.Context.Reviews())
+}
+
+func (c *Context) CurrentReviews() ([]*pull.Review, error) {
+	return c.applyReviewOptions(c.Context.CurrentReviews())
+}
+
+func (c *Context) applyReviewOptions(reviews []*pull.Review, err error) ([]*pull.Review, error) {
 	if err != nil {
 		return nil, err
 	}

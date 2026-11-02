@@ -251,6 +251,10 @@ func (c *Context) Reviews() ([]*pull.Review, error) {
 	return c.ReviewsValue, c.ReviewsError
 }
 
+func (c *Context) CurrentReviews() ([]*pull.Review, error) {
+	return c.ReviewsValue, c.ReviewsError
+}
+
 func (c *Context) Teams() (map[string]pull.Permission, error) {
 	return c.TeamsValue, c.TeamsError
 }

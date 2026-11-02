@@ -496,6 +496,40 @@ func (ghc *GitHubContext) Reviews() ([]*Review, error) {
 	return ghc.reviews, nil
 }
 
+func (ghc *GitHubContext) CurrentReviews() ([]*Review, error) {
+	var q struct {
+		Repository struct {
+			PullRequest struct {
+				Reviews struct {
+					PageInfo v4PageInfo
+					Nodes    []v4PullRequestReview
+				} `graphql:"reviews(first: 50, after: $reviewCursor, states: [APPROVED, CHANGES_REQUESTED, COMMENTED])"`
+			} `graphql:"pullRequest(number: $number)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+	qvars := map[string]any{
+		"owner":        githubv4.String(ghc.owner),
+		"name":         githubv4.String(ghc.repo),
+		"number":       githubv4.Int(ghc.number),
+		"reviewCursor": (*githubv4.String)(nil),
+	}
+
+	var reviews []*Review
+	for {
+		if err := ghc.v4client.Query(ghc.ctx, &q, qvars); err != nil {
+			return nil, errors.Wrap(err, "failed to load current pull request reviews")
+		}
+
+		for _, review := range q.Repository.PullRequest.Reviews.Nodes {
+			reviews = append(reviews, review.ToReview())
+		}
+		if !q.Repository.PullRequest.Reviews.PageInfo.UpdateCursor(qvars, "reviewCursor") {
+			break
+		}
+	}
+	return reviews, nil
+}
+
 func (ghc *GitHubContext) RepositoryCollaborators(minPermission Permission) ([]*Collaborator, error) {
 	if ghc.collaborators == nil {
 		ghc.collaborators = make(map[Permission][]*Collaborator)
