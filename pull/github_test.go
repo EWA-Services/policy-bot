@@ -263,6 +263,20 @@ func TestReviewerAssignmentBlockersPaginatesIndependently(t *testing.T) {
 	})
 }
 
+func TestReviewerAssignmentBlockersRejectsHeadChange(t *testing.T) {
+	rp := &ResponsePlayer{}
+	rule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.reviewRequests"),
+		"testdata/responses/pull_reviewer_head_change.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil)
+	_, err := ctx.ReviewerAssignmentBlockers()
+
+	require.EqualError(t, err, "pull request head changed while loading reviewer assignment blockers")
+	assert.Equal(t, 2, rule.Count)
+}
+
 type recordingRequestMatcher struct {
 	matcher RequestMatcher
 	bodies  [][]byte

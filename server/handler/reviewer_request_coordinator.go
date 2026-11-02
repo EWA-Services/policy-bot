@@ -37,12 +37,7 @@ type reviewerRequestEntry struct {
 	mu         sync.Mutex
 	references int
 	expiresAt  time.Time
-	blockers   map[reviewerKey]*pull.Reviewer
-}
-
-type reviewerKey struct {
-	type_ pull.ReviewerType
-	name  string
+	blockers   map[pull.Reviewer]struct{}
 }
 
 type reviewerRequestLease struct {
@@ -68,7 +63,7 @@ func (c *ReviewerRequestCoordinator) Lock(owner, repository string, number int) 
 	}
 	entry := c.entries[key]
 	if entry == nil {
-		entry = &reviewerRequestEntry{blockers: make(map[reviewerKey]*pull.Reviewer)}
+		entry = &reviewerRequestEntry{blockers: make(map[pull.Reviewer]struct{})}
 		c.entries[key] = entry
 	}
 	entry.references++
@@ -80,9 +75,9 @@ func (c *ReviewerRequestCoordinator) Lock(owner, repository string, number int) 
 
 func (l *reviewerRequestLease) Blockers() []*pull.Reviewer {
 	blockers := make([]*pull.Reviewer, 0, len(l.entry.blockers))
-	for _, blocker := range l.entry.blockers {
-		copy := *blocker
-		blockers = append(blockers, &copy)
+	for blocker := range l.entry.blockers {
+		blocker := blocker
+		blockers = append(blockers, &blocker)
 	}
 	return blockers
 }
@@ -97,8 +92,7 @@ func (l *reviewerRequestLease) MarkAssigned(selection reviewer.Selection) {
 }
 
 func (l *reviewerRequestLease) markBlocker(reviewerType pull.ReviewerType, name string) {
-	key := reviewerKey{type_: reviewerType, name: name}
-	l.entry.blockers[key] = &pull.Reviewer{Type: reviewerType, Name: name}
+	l.entry.blockers[pull.Reviewer{Type: reviewerType, Name: name}] = struct{}{}
 }
 
 func (l *reviewerRequestLease) Unlock() {

@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"math/rand"
+	"net/http"
 	"slices"
 
 	"github.com/google/go-github/v92/github"
@@ -95,30 +96,39 @@ func (ec *EvalContext) reconcileReviewRequests(ctx context.Context, selection re
 		return nil
 	}
 
-	// Record the attempt before the mutation so another evaluation cannot replay
-	// an assignment whose response was lost after GitHub applied it.
-	lease.MarkAssigned(missing)
-	if err := ec.requestReviewers(ctx, missing); err != nil {
+	response, err := ec.requestReviewers(ctx, missing)
+	if err != nil {
+		// A missing or successful response is ambiguous because the mutation may have
+		// completed before transport or response-decoding failed.
+		if reviewerRequestMayHaveSucceeded(response) {
+			lease.MarkAssigned(missing)
+		}
 		return errors.Wrap(err, "failed to request reviewers")
 	}
+	lease.MarkAssigned(missing)
 	return nil
 }
 
-func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.Selection) error {
+func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.Selection) (*github.Response, error) {
 	req := selectionToReviewersRequest(selection)
 	zerolog.Ctx(ctx).Debug().
 		Strs("users", req.Reviewers).
 		Strs("teams", req.TeamReviewers).
 		Msgf("Requesting reviews from %d users and %d teams", len(req.Reviewers), len(req.TeamReviewers))
 
-	_, _, err := ec.Client.PullRequests.RequestReviewers(
+	_, response, err := ec.Client.PullRequests.RequestReviewers(
 		ctx,
 		ec.PullContext.RepositoryOwner(),
 		ec.PullContext.RepositoryName(),
 		ec.PullContext.Number(),
 		req,
 	)
-	return err
+	return response, err
+}
+
+func reviewerRequestMayHaveSucceeded(response *github.Response) bool {
+	return response == nil ||
+		(response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
 }
 
 func selectionToReviewersRequest(s reviewer.Selection) github.ReviewersRequest {

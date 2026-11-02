@@ -32,18 +32,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReconcileReviewRequestsDoesNotRequestReviewerWhoReviewedDuringEvaluation(t *testing.T) {
+func TestReconcileReviewRequestsDoesNotRequestCurrentHeadReviewer(t *testing.T) {
 	prctx := newReviewerBlockerContext()
-	cachedReviews, err := prctx.Reviews()
-	require.NoError(t, err)
-	require.Empty(t, cachedReviews)
 	prctx.results = append(prctx.results, reviewerBlockerResult{
 		blockers: []*pull.Reviewer{{Type: pull.ReviewerUser, Name: "late-approver"}},
 	})
 	client, requests := newReviewerRequestClient(t)
 
 	ec := newReviewerEvalContext(client, prctx)
-	err = ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"late-approver"}})
+	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"late-approver"}})
 
 	require.NoError(t, err)
 	assert.Empty(t, requests.all())
@@ -73,16 +70,24 @@ func TestReconcileReviewRequestsPostsMissingReviewers(t *testing.T) {
 
 func TestReconcileReviewRequestsUsesCoordinatorLedgerAcrossEvaluations(t *testing.T) {
 	tests := map[string]struct {
-		status        int
-		firstHasError bool
+		statuses         []int
+		firstHasError    bool
+		expectedRequests int
 	}{
-		"successful request": {status: http.StatusCreated},
-		"uncertain request":  {status: http.StatusInternalServerError, firstHasError: true},
+		"successful request": {
+			statuses:         []int{http.StatusCreated},
+			expectedRequests: 1,
+		},
+		"HTTP failure": {
+			statuses:         []int{http.StatusInternalServerError, http.StatusCreated},
+			firstHasError:    true,
+			expectedRequests: 2,
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			coordinator := NewReviewerRequestCoordinator()
-			client, requests := newReviewerRequestClient(t, test.status)
+			client, requests := newReviewerRequestClient(t, test.statuses...)
 			selection := reviewer.Selection{Users: []string{"amy"}}
 
 			first := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
@@ -98,9 +103,53 @@ func TestReconcileReviewRequestsUsesCoordinatorLedgerAcrossEvaluations(t *testin
 			second.ReviewerRequests = coordinator
 			require.NoError(t, second.reconcileReviewRequests(context.Background(), selection))
 
-			assert.Len(t, requests.all(), 1)
+			assert.Len(t, requests.all(), test.expectedRequests)
 		})
 	}
+}
+
+func TestReconcileReviewRequestsRetainsAttemptAfterTransportFailure(t *testing.T) {
+	transport := &errorRoundTripper{}
+	client, err := github.NewClient(github.WithTransport(transport))
+	require.NoError(t, err)
+	coordinator := NewReviewerRequestCoordinator()
+	selection := reviewer.Selection{Users: []string{"amy"}}
+
+	first := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
+	first.ReviewerRequests = coordinator
+	require.Error(t, first.reconcileReviewRequests(context.Background(), selection))
+
+	second := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
+	second.ReviewerRequests = coordinator
+	require.NoError(t, second.reconcileReviewRequests(context.Background(), selection))
+
+	assert.Equal(t, 1, transport.calls)
+}
+
+func TestReconcileReviewRequestsRetainsAttemptAfterSuccessfulResponseDecodeFailure(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"malformed"`))
+	}))
+	t.Cleanup(server.Close)
+
+	baseURL := server.URL + "/"
+	client, err := github.NewClient(github.WithURLs(&baseURL, &baseURL))
+	require.NoError(t, err)
+	coordinator := NewReviewerRequestCoordinator()
+	selection := reviewer.Selection{Users: []string{"amy"}}
+
+	first := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
+	first.ReviewerRequests = coordinator
+	require.Error(t, first.reconcileReviewRequests(context.Background(), selection))
+
+	second := newReviewerEvalContext(client, newReviewerBlockerContext(nil))
+	second.ReviewerRequests = coordinator
+	require.NoError(t, second.reconcileReviewRequests(context.Background(), selection))
+
+	assert.Equal(t, 1, requestCount)
 }
 
 func TestReconcileReviewRequestsReturnsRequestError(t *testing.T) {
@@ -179,6 +228,15 @@ type reviewerRequestRecorder struct {
 	mu       sync.Mutex
 	statuses []int
 	requests []recordedReviewerRequest
+}
+
+type errorRoundTripper struct {
+	calls int
+}
+
+func (r *errorRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	r.calls++
+	return nil, stderrors.New("connection lost")
 }
 
 func newReviewerRequestClient(t *testing.T, statuses ...int) (*github.Client, *reviewerRequestRecorder) {
