@@ -85,6 +85,12 @@ func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result
 	logger.Debug().Msgf("Waiting for %s to spread out reviewer processing", delay)
 	time.Sleep(delay)
 
+	return ec.requestMissingReviews(ctx, selection)
+}
+
+func (ec *EvalContext) requestMissingReviews(ctx context.Context, selection reviewer.Selection) error {
+	logger := zerolog.Ctx(ctx)
+
 	// Get existing reviewers _after_ computing the selection and sleeping in
 	// case something assigned reviewers (or left reviews) in the meantime.
 	reviewers, err := ec.PullContext.RequestedReviewers()
