@@ -97,15 +97,12 @@ func (ec *EvalContext) reconcileReviewRequests(ctx context.Context, selection re
 	}
 
 	response, err := ec.requestReviewers(ctx, missing)
+	if shouldRetainReviewerRequestAttempt(response) {
+		lease.MarkAssigned(missing)
+	}
 	if err != nil {
-		// A missing or successful response is ambiguous because the mutation may have
-		// completed before transport or response-decoding failed.
-		if reviewerRequestMayHaveSucceeded(response) {
-			lease.MarkAssigned(missing)
-		}
 		return errors.Wrap(err, "failed to request reviewers")
 	}
-	lease.MarkAssigned(missing)
 	return nil
 }
 
@@ -126,9 +123,10 @@ func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.
 	return response, err
 }
 
-func reviewerRequestMayHaveSucceeded(response *github.Response) bool {
+func shouldRetainReviewerRequestAttempt(response *github.Response) bool {
 	return response == nil ||
-		(response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
+		(response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices) ||
+		response.StatusCode >= http.StatusInternalServerError
 }
 
 func selectionToReviewersRequest(s reviewer.Selection) github.ReviewersRequest {

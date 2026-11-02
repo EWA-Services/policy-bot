@@ -78,10 +78,15 @@ func TestReconcileReviewRequestsUsesCoordinatorLedgerAcrossEvaluations(t *testin
 			statuses:         []int{http.StatusCreated},
 			expectedRequests: 1,
 		},
-		"HTTP failure": {
-			statuses:         []int{http.StatusInternalServerError, http.StatusCreated},
+		"definite rejection": {
+			statuses:         []int{http.StatusUnprocessableEntity, http.StatusCreated},
 			firstHasError:    true,
 			expectedRequests: 2,
+		},
+		"ambiguous server failure": {
+			statuses:         []int{http.StatusInternalServerError},
+			firstHasError:    true,
+			expectedRequests: 1,
 		},
 	}
 	for name, test := range tests {

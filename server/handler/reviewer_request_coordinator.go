@@ -26,8 +26,6 @@ import (
 
 const reviewerRequestRetention = time.Minute
 
-// ReviewerRequestCoordinator serializes review assignment for each pull request.
-// Its short-lived ledger covers concurrent evaluations until GitHub's timeline is visible.
 type ReviewerRequestCoordinator struct {
 	mu      sync.Mutex
 	entries map[string]*reviewerRequestEntry
@@ -76,7 +74,6 @@ func (c *ReviewerRequestCoordinator) Lock(owner, repository string, number int) 
 func (l *reviewerRequestLease) Blockers() []*pull.Reviewer {
 	blockers := make([]*pull.Reviewer, 0, len(l.entry.blockers))
 	for blocker := range l.entry.blockers {
-		blocker := blocker
 		blockers = append(blockers, &blocker)
 	}
 	return blockers
