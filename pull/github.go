@@ -684,10 +684,12 @@ func findUserIndex(user string, users []v4Actor) int {
 	return -1
 }
 
-func (ghc *GitHubContext) ReviewerRequestHistory() ([]*Reviewer, error) {
+func (ghc *GitHubContext) ReviewerAssignmentBlockers() ([]*Reviewer, error) {
 	var q struct {
 		Repository struct {
 			PullRequest struct {
+				HeadRefOID string
+
 				ReviewRequests struct {
 					PageInfo v4PageInfo
 					Nodes    []struct {
@@ -707,6 +709,11 @@ func (ghc *GitHubContext) ReviewerRequestHistory() ([]*Reviewer, error) {
 						} `graphql:"... on ReviewRequestRemovedEvent"`
 					}
 				} `graphql:"timelineItems(first: 100, after: $timelineCursor, itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT])"`
+
+				Reviews struct {
+					PageInfo v4PageInfo
+					Nodes    []v4PullRequestReview
+				} `graphql:"reviews(first: 100, after: $reviewCursor, states: [APPROVED, CHANGES_REQUESTED, COMMENTED])"`
 			} `graphql:"pullRequest(number: $number)"`
 		} `graphql:"repository(owner: $owner, name: $name)"`
 	}
@@ -717,17 +724,24 @@ func (ghc *GitHubContext) ReviewerRequestHistory() ([]*Reviewer, error) {
 
 		"requestCursor":  (*githubv4.String)(nil),
 		"timelineCursor": (*githubv4.String)(nil),
+		"reviewCursor":   (*githubv4.String)(nil),
 	}
 
 	reviewers := []*Reviewer{}
+	var headSHA string
 	for {
 		complete := 0
 		if err := ghc.v4client.Query(ghc.ctx, &q, qvars); err != nil {
-			return nil, errors.Wrap(err, "failed to load reviewer request history")
+			return nil, errors.Wrap(err, "failed to load reviewer assignment blockers")
+		}
+		if headSHA == "" {
+			headSHA = q.Repository.PullRequest.HeadRefOID
+		} else if headSHA != q.Repository.PullRequest.HeadRefOID {
+			return nil, errors.New("pull request head changed while loading reviewer assignment blockers")
 		}
 
 		for _, n := range q.Repository.PullRequest.ReviewRequests.Nodes {
-			reviewers = append(reviewers, n.RequestedReviewer.ToReviewer(false))
+			reviewers = append(reviewers, n.RequestedReviewer.ToReviewer())
 		}
 		if !q.Repository.PullRequest.ReviewRequests.PageInfo.UpdateCursor(qvars, "requestCursor") {
 			complete++
@@ -736,16 +750,29 @@ func (ghc *GitHubContext) ReviewerRequestHistory() ([]*Reviewer, error) {
 		for _, n := range q.Repository.PullRequest.TimelineItems.Nodes {
 			switch n.Type {
 			case "ReviewRequestedEvent":
-				reviewers = append(reviewers, n.ReviewRequestedEvent.RequestedReviewer.ToReviewer(false))
+				reviewers = append(reviewers, n.ReviewRequestedEvent.RequestedReviewer.ToReviewer())
 			case "ReviewRequestRemovedEvent":
-				reviewers = append(reviewers, n.ReviewRequestRemovedEvent.RequestedReviewer.ToReviewer(true))
+				reviewers = append(reviewers, n.ReviewRequestRemovedEvent.RequestedReviewer.ToReviewer())
 			}
 		}
 		if !q.Repository.PullRequest.TimelineItems.PageInfo.UpdateCursor(qvars, "timelineCursor") {
 			complete++
 		}
 
-		if complete == 2 {
+		for _, review := range q.Repository.PullRequest.Reviews.Nodes {
+			if review.Commit.OID != headSHA {
+				continue
+			}
+			reviewers = append(reviewers, &Reviewer{Type: ReviewerUser, Name: review.Author.GetV3Login()})
+			for _, team := range review.OnBehalfOf.Nodes {
+				reviewers = append(reviewers, &Reviewer{Type: ReviewerTeam, Name: team.Slug})
+			}
+		}
+		if !q.Repository.PullRequest.Reviews.PageInfo.UpdateCursor(qvars, "reviewCursor") {
+			complete++
+		}
+
+		if complete == 3 {
 			break
 		}
 	}
@@ -1272,10 +1299,8 @@ type v4RequestedReviewer struct {
 	Team v4Team  `graphql:"... on Team"`
 }
 
-func (rr *v4RequestedReviewer) ToReviewer(removed bool) *Reviewer {
-	r := Reviewer{
-		Removed: removed,
-	}
+func (rr *v4RequestedReviewer) ToReviewer() *Reviewer {
+	r := Reviewer{}
 	switch {
 	case rr.User.Login != "":
 		r.Type = ReviewerUser

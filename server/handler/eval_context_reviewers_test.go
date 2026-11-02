@@ -32,12 +32,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReconcileReviewRequestsDoesNotRepeatHistoricalRequest(t *testing.T) {
-	prctx := newReviewerHistoryContext([]*pull.Reviewer{{Type: pull.ReviewerUser, Name: "late-approver"}})
+func TestReconcileReviewRequestsDoesNotRequestReviewerWhoReviewedDuringEvaluation(t *testing.T) {
+	prctx := newReviewerBlockerContext()
+	cachedReviews, err := prctx.Reviews()
+	require.NoError(t, err)
+	require.Empty(t, cachedReviews)
+	prctx.results = append(prctx.results, reviewerBlockerResult{
+		blockers: []*pull.Reviewer{{Type: pull.ReviewerUser, Name: "late-approver"}},
+	})
 	client, requests := newReviewerRequestClient(t)
 
 	ec := &EvalContext{Client: client, PullContext: prctx}
-	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"late-approver"}})
+	err = ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"late-approver"}})
 
 	require.NoError(t, err)
 	assert.Empty(t, requests.all())
@@ -45,7 +51,7 @@ func TestReconcileReviewRequestsDoesNotRepeatHistoricalRequest(t *testing.T) {
 }
 
 func TestReconcileReviewRequestsPostsMissingReviewers(t *testing.T) {
-	prctx := newReviewerHistoryContext(nil)
+	prctx := newReviewerBlockerContext(nil)
 	client, requests := newReviewerRequestClient(t, http.StatusCreated)
 
 	ec := &EvalContext{Client: client, PullContext: prctx}
@@ -70,7 +76,7 @@ func TestReconcileReviewRequestsConvergesAfterConcurrentRequest(t *testing.T) {
 		{Type: pull.ReviewerUser, Name: "amy"},
 		{Type: pull.ReviewerTeam, Name: "platform"},
 	}
-	prctx := newReviewerHistoryContext(nil, desiredHistory)
+	prctx := newReviewerBlockerContext(nil, desiredHistory)
 	client, requests := newReviewerRequestClient(t, http.StatusUnprocessableEntity)
 
 	ec := &EvalContext{Client: client, PullContext: prctx}
@@ -85,7 +91,7 @@ func TestReconcileReviewRequestsConvergesAfterConcurrentRequest(t *testing.T) {
 }
 
 func TestReconcileReviewRequestsRetriesPartialProgress(t *testing.T) {
-	prctx := newReviewerHistoryContext(
+	prctx := newReviewerBlockerContext(
 		nil,
 		[]*pull.Reviewer{{Type: pull.ReviewerUser, Name: "amy"}},
 		[]*pull.Reviewer{
@@ -110,7 +116,7 @@ func TestReconcileReviewRequestsRetriesPartialProgress(t *testing.T) {
 }
 
 func TestReconcileReviewRequestsReturnsOriginalErrorWithoutProgress(t *testing.T) {
-	prctx := newReviewerHistoryContext(nil, nil)
+	prctx := newReviewerBlockerContext(nil, nil)
 	client, requests := newReviewerRequestClient(t, http.StatusUnprocessableEntity)
 
 	ec := &EvalContext{Client: client, PullContext: prctx}
@@ -124,10 +130,10 @@ func TestReconcileReviewRequestsReturnsOriginalErrorWithoutProgress(t *testing.T
 }
 
 func TestReconcileReviewRequestsRetainsRequestAndReadErrors(t *testing.T) {
-	historyError := stderrors.New("reviewer history unavailable")
-	prctx := newReviewerHistoryResultContext(
-		reviewerHistoryResult{},
-		reviewerHistoryResult{err: historyError},
+	blockersError := stderrors.New("reviewer blockers unavailable")
+	prctx := newReviewerBlockerResultContext(
+		reviewerBlockerResult{},
+		reviewerBlockerResult{err: blockersError},
 	)
 	client, requests := newReviewerRequestClient(t, http.StatusUnprocessableEntity)
 
@@ -137,52 +143,52 @@ func TestReconcileReviewRequestsRetainsRequestAndReadErrors(t *testing.T) {
 	var githubError *github.ErrorResponse
 	require.ErrorAs(t, err, &githubError)
 	assert.Equal(t, "request failed 1", githubError.Message)
-	assert.ErrorIs(t, err, historyError)
+	assert.ErrorIs(t, err, blockersError)
 	assert.Len(t, requests.all(), 1)
 }
 
 func TestReconcileReviewRequestsFailsClosedOnInitialReadError(t *testing.T) {
-	historyError := stderrors.New("reviewer history unavailable")
-	prctx := newReviewerHistoryResultContext(reviewerHistoryResult{err: historyError})
+	blockersError := stderrors.New("reviewer blockers unavailable")
+	prctx := newReviewerBlockerResultContext(reviewerBlockerResult{err: blockersError})
 	client, requests := newReviewerRequestClient(t, http.StatusCreated)
 
 	ec := &EvalContext{Client: client, PullContext: prctx}
 	err := ec.reconcileReviewRequests(context.Background(), reviewer.Selection{Users: []string{"amy"}})
 
-	assert.ErrorIs(t, err, historyError)
+	assert.ErrorIs(t, err, blockersError)
 	assert.Empty(t, requests.all())
 }
 
-type reviewerHistoryContext struct {
+type reviewerBlockerContext struct {
 	*pulltest.Context
-	results []reviewerHistoryResult
+	results []reviewerBlockerResult
 	calls   int
 }
 
-type reviewerHistoryResult struct {
-	history []*pull.Reviewer
-	err     error
+type reviewerBlockerResult struct {
+	blockers []*pull.Reviewer
+	err      error
 }
 
-func newReviewerHistoryContext(histories ...[]*pull.Reviewer) *reviewerHistoryContext {
-	results := make([]reviewerHistoryResult, len(histories))
-	for i, history := range histories {
-		results[i] = reviewerHistoryResult{history: history}
+func newReviewerBlockerContext(blockerSets ...[]*pull.Reviewer) *reviewerBlockerContext {
+	results := make([]reviewerBlockerResult, len(blockerSets))
+	for i, blockers := range blockerSets {
+		results[i] = reviewerBlockerResult{blockers: blockers}
 	}
-	return newReviewerHistoryResultContext(results...)
+	return newReviewerBlockerResultContext(results...)
 }
 
-func newReviewerHistoryResultContext(results ...reviewerHistoryResult) *reviewerHistoryContext {
-	return &reviewerHistoryContext{Context: &pulltest.Context{}, results: results}
+func newReviewerBlockerResultContext(results ...reviewerBlockerResult) *reviewerBlockerContext {
+	return &reviewerBlockerContext{Context: &pulltest.Context{}, results: results}
 }
 
-func (c *reviewerHistoryContext) ReviewerRequestHistory() ([]*pull.Reviewer, error) {
+func (c *reviewerBlockerContext) ReviewerAssignmentBlockers() ([]*pull.Reviewer, error) {
 	if c.calls >= len(c.results) {
-		return nil, stderrors.New("unexpected reviewer history read")
+		return nil, stderrors.New("unexpected reviewer blocker read")
 	}
 	result := c.results[c.calls]
 	c.calls++
-	return result.history, result.err
+	return result.blockers, result.err
 }
 
 type recordedReviewerRequest struct {

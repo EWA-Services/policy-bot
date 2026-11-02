@@ -108,9 +108,9 @@ type Context interface {
 	// implementation dependent.
 	Reviews() ([]*Review, error)
 
-	// ReviewerRequestHistory returns an uncached list of active and historical review requests.
-	// Every entry blocks PolicyBot from requesting the same reviewer again.
-	ReviewerRequestHistory() ([]*Reviewer, error)
+	// ReviewerAssignmentBlockers returns an uncached list of active and historical review requests
+	// plus users and teams that reviewed the current head. Every entry blocks reviewer assignment.
+	ReviewerAssignmentBlockers() ([]*Reviewer, error)
 
 	// IsDraft returns the draft status of the Pull Request.
 	IsDraft() bool
@@ -239,9 +239,8 @@ const (
 )
 
 type Reviewer struct {
-	Type    ReviewerType
-	Name    string
-	Removed bool
+	Type ReviewerType
+	Name string
 }
 
 type Collaborator struct {

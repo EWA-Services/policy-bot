@@ -72,60 +72,51 @@ func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result
 }
 
 func (ec *EvalContext) reconcileReviewRequests(ctx context.Context, selection reviewer.Selection) error {
+	const maxAttempts = 2
+
 	logger := zerolog.Ctx(ctx)
 
-	history, err := ec.PullContext.ReviewerRequestHistory()
+	blockers, err := ec.PullContext.ReviewerAssignmentBlockers()
 	if err != nil {
-		return errors.Wrap(err, "failed to read reviewer request history")
+		return errors.Wrap(err, "failed to read reviewer assignment blockers")
 	}
 
-	missing := selection.Difference(history)
+	missing := selection.Difference(blockers)
 	if missing.IsEmpty() {
-		logger.Debug().Msg("All selected reviewers were already requested")
+		logger.Debug().Msg("All selected reviewers were already requested or reviewed")
 		return nil
 	}
 
-	requestErr := ec.requestReviewers(ctx, missing)
-	if requestErr == nil {
-		return nil
-	}
+	var requestErrs []error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		requestErr := ec.requestReviewers(ctx, missing)
+		if requestErr == nil {
+			return nil
+		}
+		requestErrs = append(requestErrs, errors.Wrapf(requestErr, "reviewer request attempt %d failed", attempt))
 
-	history, historyErr := ec.PullContext.ReviewerRequestHistory()
-	if historyErr != nil {
-		return stderrors.Join(
-			errors.Wrap(requestErr, "failed to request reviewers"),
-			errors.Wrap(historyErr, "failed to reconcile reviewer request history"),
-		)
-	}
+		blockers, blockersErr := ec.PullContext.ReviewerAssignmentBlockers()
+		if blockersErr != nil {
+			return stderrors.Join(append(
+				requestErrs,
+				errors.Wrap(blockersErr, "failed to reconcile reviewer assignment blockers"),
+			)...)
+		}
 
-	remaining := selection.Difference(history)
-	if remaining.IsEmpty() {
-		return nil
+		remaining := selection.Difference(blockers)
+		if remaining.IsEmpty() {
+			logger.Warn().Err(stderrors.Join(requestErrs...)).
+				Strs("users", missing.Users).
+				Strs("teams", missing.Teams).
+				Msg("Reviewer request failed, but GitHub shows all selected reviewers were assigned")
+			return nil
+		}
+		if reviewerSelectionSize(remaining) >= reviewerSelectionSize(missing) {
+			return stderrors.Join(requestErrs...)
+		}
+		missing = remaining
 	}
-	if reviewerSelectionSize(remaining) >= reviewerSelectionSize(missing) {
-		return errors.Wrap(requestErr, "failed to request reviewers")
-	}
-
-	retryErr := ec.requestReviewers(ctx, remaining)
-	if retryErr == nil {
-		return nil
-	}
-
-	history, historyErr = ec.PullContext.ReviewerRequestHistory()
-	if historyErr != nil {
-		return stderrors.Join(
-			errors.Wrap(requestErr, "initial reviewer request failed"),
-			errors.Wrap(retryErr, "remaining reviewer request failed"),
-			errors.Wrap(historyErr, "failed to reconcile reviewer request history after retry"),
-		)
-	}
-	if selection.Difference(history).IsEmpty() {
-		return nil
-	}
-	return stderrors.Join(
-		errors.Wrap(requestErr, "initial reviewer request failed"),
-		errors.Wrap(retryErr, "remaining reviewer request failed"),
-	)
+	return stderrors.Join(requestErrs...)
 }
 
 func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.Selection) error {

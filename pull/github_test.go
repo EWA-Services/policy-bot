@@ -205,7 +205,7 @@ func TestReviews(t *testing.T) {
 	assert.Equal(t, 2, dataRule.Count, "cached reviews were not used")
 }
 
-func TestReviewerRequestHistory(t *testing.T) {
+func TestReviewerAssignmentBlockers(t *testing.T) {
 	rp := &ResponsePlayer{}
 	historyRule := rp.AddRule(
 		GraphQLNodePrefixMatcher("repository.pullRequest.reviewRequests"),
@@ -214,15 +214,17 @@ func TestReviewerRequestHistory(t *testing.T) {
 
 	ctx := makeContext(t, rp, nil, nil)
 
-	history, err := ctx.ReviewerRequestHistory()
+	blockers, err := ctx.ReviewerAssignmentBlockers()
 	require.NoError(t, err)
 	assert.Equal(t, []*Reviewer{
 		{Type: ReviewerUser, Name: "requested-user"},
 		{Type: ReviewerTeam, Name: "requested-team"},
 		{Type: ReviewerUser, Name: "previously-requested-user"},
-		{Type: ReviewerUser, Name: "removed-user", Removed: true},
-	}, history)
-	assert.Equal(t, 1, historyRule.Count, "reviewer request history was not loaded in one GraphQL read")
+		{Type: ReviewerUser, Name: "removed-user"},
+		{Type: ReviewerUser, Name: "late-approver"},
+		{Type: ReviewerTeam, Name: "review-team"},
+	}, blockers)
+	assert.Equal(t, 1, historyRule.Count, "reviewer assignment blockers were not loaded in one GraphQL read")
 }
 
 func TestNoReviews(t *testing.T) {
