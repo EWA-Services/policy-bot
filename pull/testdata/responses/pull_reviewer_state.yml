@@ -1,0 +1,53 @@
+- status: 200
+  body: |
+    {
+      "errors": [],
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "reviewRequests": {
+              "pageInfo": {
+                "endCursor": null,
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "requested-user"
+                  }
+                },
+                {
+                  "requestedReviewer": {
+                    "__typename": "Team",
+                    "slug": "requested-team"
+                  }
+                }
+              ]
+            },
+            "timelineItems": {
+              "pageInfo": {
+                "endCursor": null,
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "__typename": "ReviewRequestedEvent",
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "previously-requested-user"
+                  }
+                },
+                {
+                  "__typename": "ReviewRequestRemovedEvent",
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "removed-user"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }

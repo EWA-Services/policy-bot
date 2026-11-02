@@ -66,8 +66,8 @@ type Context struct {
 	CollaboratorsValue []*pull.Collaborator
 	CollaboratorsError error
 
-	RequestedReviewersValue []*pull.Reviewer
-	RequestedReviewersError error
+	ReviewerRequestHistoryValue []*pull.Reviewer
+	ReviewerRequestHistoryError error
 
 	LatestStatusesValue map[string]string
 	LatestStatusesError error
@@ -239,10 +239,6 @@ func (c *Context) TeamMembers(team string) ([]string, error) {
 	return inverted[team], nil
 }
 
-func (c *Context) RequestedReviewers() ([]*pull.Reviewer, error) {
-	return c.RequestedReviewersValue, c.RequestedReviewersError
-}
-
 func (c *Context) Comments() ([]*pull.Comment, error) {
 	return c.CommentsValue, c.CommentsError
 }
@@ -251,8 +247,8 @@ func (c *Context) Reviews() ([]*pull.Review, error) {
 	return c.ReviewsValue, c.ReviewsError
 }
 
-func (c *Context) CurrentReviews() ([]*pull.Review, error) {
-	return c.ReviewsValue, c.ReviewsError
+func (c *Context) ReviewerRequestHistory() ([]*pull.Reviewer, error) {
+	return c.ReviewerRequestHistoryValue, c.ReviewerRequestHistoryError
 }
 
 func (c *Context) Teams() (map[string]pull.Permission, error) {

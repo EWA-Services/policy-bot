@@ -16,14 +16,13 @@ package handler
 
 import (
 	"context"
+	stderrors "errors"
 	"math/rand"
 	"slices"
-	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/palantir/policy-bot/policy/common"
 	"github.com/palantir/policy-bot/policy/reviewer"
-	"github.com/palantir/policy-bot/pull"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 )
@@ -53,8 +52,6 @@ func (ec *EvalContext) requestReviewsForResult(ctx context.Context, trigger comm
 }
 
 func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result) error {
-	const maxDelayMillis = 2500
-
 	logger := zerolog.Ctx(ctx)
 
 	// Seed the random source with the PR creation time so that repeated
@@ -71,89 +68,98 @@ func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result
 		return nil
 	}
 
-	// This is a terrible strategy to avoid conflicts between closely spaced
-	// events assigning the same reviewers, but I expect it to work alright in
-	// practice and it avoids any kind of coordination backend:
-	//
-	// Wait a random amount of time to space out events then check for existing
-	// reviewers and apply the difference. The idea is to order two competing
-	// events such that one observes the applied reviewers of the other.
-	//
-	// Use the global random source instead of the per-PR source so that two
-	// events for the same PR don't wait for the same amount of time.
-	delay := time.Duration(rand.Intn(maxDelayMillis)) * time.Millisecond
-	logger.Debug().Msgf("Waiting for %s to spread out reviewer processing", delay)
-	time.Sleep(delay)
-
-	return ec.requestMissingReviews(ctx, selection)
+	return ec.reconcileReviewRequests(ctx, selection)
 }
 
-func (ec *EvalContext) requestMissingReviews(ctx context.Context, selection reviewer.Selection) error {
+func (ec *EvalContext) reconcileReviewRequests(ctx context.Context, selection reviewer.Selection) error {
 	logger := zerolog.Ctx(ctx)
 
-	// Get existing reviewers _after_ computing the selection and sleeping in
-	// case something assigned reviewers (or left reviews) in the meantime.
-	reviewers, err := ec.PullContext.RequestedReviewers()
+	history, err := ec.PullContext.ReviewerRequestHistory()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to read reviewer request history")
 	}
 
-	// After a user leaves a review, GitHub removes the user from the request
-	// list. If the review didn't actually change the state of the requesting
-	// rule, policy-bot may request the same user again. To avoid this, include
-	// any reviews on the head commit in the set of existing reviewers to avoid
-	// re-requesting them until the content changes.
-	head := ec.PullContext.HeadSHA()
-	reviews, err := ec.PullContext.CurrentReviews()
-	if err != nil {
-		return err
-	}
-	for _, r := range reviews {
-		if r.SHA == head {
-			reviewers = append(reviewers, &pull.Reviewer{
-				Type: pull.ReviewerUser,
-				Name: r.Author,
-			})
-
-			for _, team := range r.Teams {
-				reviewers = append(reviewers, &pull.Reviewer{
-					Type: pull.ReviewerTeam,
-					Name: team,
-				})
-			}
-		}
+	missing := selection.Difference(history)
+	if missing.IsEmpty() {
+		logger.Debug().Msg("All selected reviewers were already requested")
+		return nil
 	}
 
-	if diff := selection.Difference(reviewers); !diff.IsEmpty() {
-		req := selectionToReviewersRequest(diff)
-		logger.Debug().
-			Strs("users", req.Reviewers).
-			Strs("teams", req.TeamReviewers).
-			Msgf("Requesting reviews from %d users and %d teams", len(req.Reviewers), len(req.TeamReviewers))
-
-		owner := ec.PullContext.RepositoryOwner()
-		name := ec.PullContext.RepositoryName()
-		number := ec.PullContext.Number()
-
-		_, _, err = ec.Client.PullRequests.RequestReviewers(ctx, owner, name, number, req)
-		return errors.Wrap(err, "failed to request reviewers")
+	requestErr := ec.requestReviewers(ctx, missing)
+	if requestErr == nil {
+		return nil
 	}
 
-	logger.Debug().Msg("All selected reviewers are already assigned or were explicitly removed")
-	return nil
+	history, historyErr := ec.PullContext.ReviewerRequestHistory()
+	if historyErr != nil {
+		return stderrors.Join(
+			errors.Wrap(requestErr, "failed to request reviewers"),
+			errors.Wrap(historyErr, "failed to reconcile reviewer request history"),
+		)
+	}
+
+	remaining := selection.Difference(history)
+	if remaining.IsEmpty() {
+		return nil
+	}
+	if reviewerSelectionSize(remaining) >= reviewerSelectionSize(missing) {
+		return errors.Wrap(requestErr, "failed to request reviewers")
+	}
+
+	retryErr := ec.requestReviewers(ctx, remaining)
+	if retryErr == nil {
+		return nil
+	}
+
+	history, historyErr = ec.PullContext.ReviewerRequestHistory()
+	if historyErr != nil {
+		return stderrors.Join(
+			errors.Wrap(requestErr, "initial reviewer request failed"),
+			errors.Wrap(retryErr, "remaining reviewer request failed"),
+			errors.Wrap(historyErr, "failed to reconcile reviewer request history after retry"),
+		)
+	}
+	if selection.Difference(history).IsEmpty() {
+		return nil
+	}
+	return stderrors.Join(
+		errors.Wrap(requestErr, "initial reviewer request failed"),
+		errors.Wrap(retryErr, "remaining reviewer request failed"),
+	)
+}
+
+func (ec *EvalContext) requestReviewers(ctx context.Context, selection reviewer.Selection) error {
+	req := selectionToReviewersRequest(selection)
+	zerolog.Ctx(ctx).Debug().
+		Strs("users", req.Reviewers).
+		Strs("teams", req.TeamReviewers).
+		Msgf("Requesting reviews from %d users and %d teams", len(req.Reviewers), len(req.TeamReviewers))
+
+	_, _, err := ec.Client.PullRequests.RequestReviewers(
+		ctx,
+		ec.PullContext.RepositoryOwner(),
+		ec.PullContext.RepositoryName(),
+		ec.PullContext.Number(),
+		req,
+	)
+	return err
+}
+
+func reviewerSelectionSize(selection reviewer.Selection) int {
+	return len(selection.Users) + len(selection.Teams)
 }
 
 func selectionToReviewersRequest(s reviewer.Selection) github.ReviewersRequest {
 	req := github.ReviewersRequest{}
 
 	if len(s.Users) > 0 {
-		req.Reviewers = s.Users
+		req.Reviewers = slices.Clone(s.Users)
 	} else {
 		req.Reviewers = []string{}
 	}
 
 	if len(s.Teams) > 0 {
-		req.TeamReviewers = s.Teams
+		req.TeamReviewers = slices.Clone(s.Teams)
 	} else {
 		req.TeamReviewers = []string{}
 	}

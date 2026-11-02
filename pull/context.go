@@ -108,8 +108,9 @@ type Context interface {
 	// implementation dependent.
 	Reviews() ([]*Review, error)
 
-	// CurrentReviews lists reviews without using the evaluation cache.
-	CurrentReviews() ([]*Review, error)
+	// ReviewerRequestHistory returns an uncached list of active and historical review requests.
+	// Every entry blocks PolicyBot from requesting the same reviewer again.
+	ReviewerRequestHistory() ([]*Reviewer, error)
 
 	// IsDraft returns the draft status of the Pull Request.
 	IsDraft() bool
@@ -125,10 +126,6 @@ type Context interface {
 	// Teams lists the set of team collaborators, along with their respective
 	// permission on a repo.
 	Teams() (map[string]Permission, error)
-
-	// RequestedReviewers returns any current and dismissed review requests on
-	// the pull request.
-	RequestedReviewers() ([]*Reviewer, error)
 
 	// LatestStatuses returns a map of status check names to the latest result
 	LatestStatuses() (map[string]string, error)

@@ -164,12 +164,8 @@ func TestCommits(t *testing.T) {
 func TestReviews(t *testing.T) {
 	rp := &ResponsePlayer{}
 	dataRule := rp.AddRule(
-		GraphQLNodePrefixMatcher("repository.pullRequest.commits"),
-		"testdata/responses/pull_commits_comments_reviews.yml",
-	)
-	currentReviewsRule := rp.AddRule(
 		GraphQLNodePrefixMatcher("repository.pullRequest.reviews"),
-		"testdata/responses/pull_current_reviews.yml",
+		"testdata/responses/pull_commits_comments_reviews.yml",
 	)
 
 	ctx := makeContext(t, rp, nil, nil)
@@ -207,13 +203,26 @@ func TestReviews(t *testing.T) {
 
 	require.Len(t, reviews, 3, "incorrect number of reviews")
 	assert.Equal(t, 2, dataRule.Count, "cached reviews were not used")
+}
 
-	reviews, err = ctx.CurrentReviews()
+func TestReviewerRequestHistory(t *testing.T) {
+	rp := &ResponsePlayer{}
+	historyRule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.reviewRequests"),
+		"testdata/responses/pull_reviewer_state.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil)
+
+	history, err := ctx.ReviewerRequestHistory()
 	require.NoError(t, err)
-
-	require.Len(t, reviews, 1, "incorrect number of current reviews")
-	assert.Equal(t, "late-approver", reviews[0].Author)
-	assert.Equal(t, 1, currentReviewsRule.Count, "current reviews were not freshly loaded")
+	assert.Equal(t, []*Reviewer{
+		{Type: ReviewerUser, Name: "requested-user"},
+		{Type: ReviewerTeam, Name: "requested-team"},
+		{Type: ReviewerUser, Name: "previously-requested-user"},
+		{Type: ReviewerUser, Name: "removed-user", Removed: true},
+	}, history)
+	assert.Equal(t, 1, historyRule.Count, "reviewer request history was not loaded in one GraphQL read")
 }
 
 func TestNoReviews(t *testing.T) {
