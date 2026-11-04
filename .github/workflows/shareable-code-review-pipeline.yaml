@@ -284,6 +284,7 @@ jobs:
       }}
     runs-on: ${{ inputs.runner }}
     permissions:
+      actions: write
       contents: read
       issues: write
       pull-requests: write
@@ -384,6 +385,21 @@ jobs:
             --skip-live-diff-check \
             --model "$CODEX_MODEL" \
             --external-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:review"
+
+      - name: Rerun failed PR metadata gate jobs for the reused review
+        if: steps.gate.outputs.action == 'skip_unchanged'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REUSED_HEAD_SHA: ${{ steps.target.outputs.head_sha }}
+          REUSED_HEAD_REF: ${{ steps.target.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          python3 ewa-actions/scripts/finn_ai_coder_github_app.py rerun-metadata-gate --failed-only \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --head-sha "$REUSED_HEAD_SHA" \
+            --head-ref "$REUSED_HEAD_REF"
 
       - name: Post AI review progress acknowledgement
         id: review-progress
@@ -1313,7 +1329,6 @@ jobs:
           --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
           --attempt "$GITHUB_RUN_ATTEMPT" --output "$RUNNER_TEMP/review-telemetry.json" --write
 
-      # A result for a commit that is no longer the head changes nothing for the new head, so its gate is not rerun.
       - name: Rerun PR metadata gate for published review
         if: steps.publish.outputs.action == 'published' && steps.publish.outputs.newer_head == ''
         env:
@@ -1326,6 +1341,21 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pr-number "$TARGET_PR_NUMBER" \
             --head-sha "$PUBLISHED_HEAD_SHA" \
+            --head-ref "$HEAD_REF"
+
+      - name: Rerun failed PR metadata gate jobs for the newer head
+        if: steps.publish.outputs.action == 'published' && steps.publish.outputs.newer_head != ''
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEWER_HEAD_SHA: ${{ steps.publish.outputs.newer_head }}
+          HEAD_REF: ${{ needs.ai-review-check-start.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          python3 ewa-actions/scripts/finn_ai_coder_github_app.py rerun-metadata-gate --failed-only \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr-number "$TARGET_PR_NUMBER" \
+            --head-sha "$NEWER_HEAD_SHA" \
             --head-ref "$HEAD_REF"
 
       - name: Create breaker analysis GitHub App token
