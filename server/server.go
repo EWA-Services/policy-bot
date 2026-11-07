@@ -173,10 +173,11 @@ func New(c *Config) (*Server, error) {
 	}
 
 	basePolicyHandler := handler.Base{
-		ClientCreator: cc,
-		BaseConfig:    &c.Server,
-		Installations: githubapp.NewInstallationsService(appClient),
-		GlobalCache:   globalCache,
+		ClientCreator:    cc,
+		BaseConfig:       &c.Server,
+		Installations:    githubapp.NewInstallationsService(appClient),
+		GlobalCache:      globalCache,
+		ReviewerRequests: handler.NewReviewerRequestCoordinator(),
 
 		PullOpts: &c.Options,
 		ConfigFetcher: &handler.ConfigFetcher{

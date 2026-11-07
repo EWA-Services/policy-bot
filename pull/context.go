@@ -108,6 +108,10 @@ type Context interface {
 	// implementation dependent.
 	Reviews() ([]*Review, error)
 
+	// ReviewerAssignmentBlockers returns an uncached list of active and historical review requests
+	// plus users and teams that reviewed the current head. Every entry blocks reviewer assignment.
+	ReviewerAssignmentBlockers() ([]*Reviewer, error)
+
 	// IsDraft returns the draft status of the Pull Request.
 	IsDraft() bool
 
@@ -122,10 +126,6 @@ type Context interface {
 	// Teams lists the set of team collaborators, along with their respective
 	// permission on a repo.
 	Teams() (map[string]Permission, error)
-
-	// RequestedReviewers returns any current and dismissed review requests on
-	// the pull request.
-	RequestedReviewers() ([]*Reviewer, error)
 
 	// LatestStatuses returns a map of status check names to the latest result
 	LatestStatuses() (map[string]string, error)
@@ -239,9 +239,8 @@ const (
 )
 
 type Reviewer struct {
-	Type    ReviewerType
-	Name    string
-	Removed bool
+	Type ReviewerType
+	Name string
 }
 
 type Collaborator struct {
