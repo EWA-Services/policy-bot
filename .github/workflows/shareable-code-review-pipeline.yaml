@@ -1482,8 +1482,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: read
           permission-checks: write
-          permission-issues: write
-          permission-pull-requests: read
+          permission-pull-requests: write
 
       - name: Read the repository risk tier
         id: tier
