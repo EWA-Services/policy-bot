@@ -983,6 +983,10 @@ jobs:
         needs.ai-review-check-start.outputs.action == 'run'
       }}
     runs-on: ${{ inputs.runner }}
+    outputs:
+      final_verdict: ${{ steps.publish.outputs.final_verdict }}
+      published_head_sha: ${{ steps.publish.outputs.head_sha }}
+      newer_head: ${{ steps.publish.outputs.newer_head }}
     permissions:
       actions: write
       contents: read
@@ -1430,4 +1434,113 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           APP_TOKEN: ${{ steps.finn-ai-coder-token.outputs.token }}
         run: bash ewa-actions/scripts/show_api_budget.sh finish-end
+
+  risk-route:
+    name: Grade risk and post the review route
+    needs:
+      - resolve-context
+      - ai-review-check-start
+      - ai-review-check-finish
+    if: >-
+      ${{
+        always() &&
+        needs.ai-review-check-finish.result == 'success' &&
+        needs.ai-review-check-finish.outputs.published_head_sha != '' &&
+        needs.ai-review-check-finish.outputs.newer_head == ''
+      }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Create EWA-Actions checkout token
+        id: ewa-actions-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          owner: EWA-Services
+          repositories: EWA-Actions
+          permission-contents: read
+
+      - name: Checkout EWA-Actions helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: EWA-Services/EWA-Actions
+          ref: ${{ inputs.actions_ref }}
+          path: ewa-actions
+          token: ${{ steps.ewa-actions-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Create finn-ai-coder token for the reviewed repository
+        id: route-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.FINN_AI_CODER_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FINN_AI_CODER_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
+          permission-checks: write
+          permission-issues: write
+          permission-pull-requests: read
+
+      - name: Read the repository risk tier
+        id: tier
+        env:
+          GH_TOKEN: ${{ steps.route-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          tier="$(gh api "repos/${GITHUB_REPOSITORY}/properties/values" \
+            --jq '[.[] | select(.property_name == "finn_risk_tier") | .value][0] // ""')"
+          echo "tier=${tier}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        if: steps.tier.outputs.tier != ''
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Select Claude OAuth token
+        id: claude-token
+        if: steps.tier.outputs.tier != ''
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
+        run: python3 ewa-actions/scripts/code_review/code_review_claude_token.py
+
+      - name: Install Claude CLI
+        if: steps.tier.outputs.tier != ''
+        run: |
+          npm install --prefix "$RUNNER_TEMP/claude-cli" -g --ignore-scripts=false @anthropic-ai/claude-code@2.1.280
+          echo "$RUNNER_TEMP/claude-cli/bin" >> "$GITHUB_PATH"
+
+      - name: Grade risk and post the route
+        if: steps.tier.outputs.tier != ''
+        working-directory: ewa-actions
+        env:
+          GH_TOKEN: ${{ steps.route-token.outputs.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: >-
+            ${{ (steps.claude-token.outputs.slot == '2' && secrets.CLAUDE_CODE_OAUTH_TOKEN_2
+            || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
+          REVIEWED_HEAD_SHA: ${{ needs.ai-review-check-finish.outputs.published_head_sha }}
+          REPOSITORY_TIER: ${{ steps.tier.outputs.tier }}
+          FINAL_VERDICT: >-
+            ${{ needs.resolve-context.outputs.review_override_actor == ''
+            && needs.ai-review-check-finish.outputs.final_verdict || 'overridden' }}
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+          python3 -m scripts.risk_tier.route_pr \
+            --repo "$TARGET_REPOSITORY" \
+            --pr "$TARGET_PR_NUMBER" \
+            --head-sha "$REVIEWED_HEAD_SHA" \
+            --tier "$REPOSITORY_TIER" \
+            --verdict "$FINAL_VERDICT"
 # yamllint enable rule:line-length
