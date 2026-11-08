@@ -18,7 +18,7 @@ on:
       runner:
         description: Runner label for review jobs; public repositories need a GitHub-hosted runner
         required: false
-        default: finn-runners
+        default: blacksmith-2vcpu-ubuntu-2404
         type: string
       pr_number:
         description: Pull request number to review
