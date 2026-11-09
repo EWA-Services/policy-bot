@@ -297,6 +297,7 @@ jobs:
       head_sha: ${{ steps.target.outputs.head_sha }}
       head_ref: ${{ steps.target.outputs.head_ref }}
       first_review: ${{ steps.gate.outputs.first_review }}
+      reused_verdict: ${{ steps.gate.outputs.reused_verdict }}
     env:
       TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
     steps:
@@ -1444,9 +1445,11 @@ jobs:
     if: >-
       ${{
         always() &&
-        needs.ai-review-check-finish.result == 'success' &&
+        ((needs.ai-review-check-finish.result == 'success' &&
         needs.ai-review-check-finish.outputs.published_head_sha != '' &&
-        needs.ai-review-check-finish.outputs.newer_head == ''
+        needs.ai-review-check-finish.outputs.newer_head == '') ||
+        (needs.ai-review-check-start.result == 'success' &&
+        needs.ai-review-check-start.outputs.action == 'skip_unchanged'))
       }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 20
@@ -1525,11 +1528,14 @@ jobs:
             || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
           TARGET_REPOSITORY: ${{ github.repository }}
           TARGET_PR_NUMBER: ${{ needs.resolve-context.outputs.target_pr_number }}
-          REVIEWED_HEAD_SHA: ${{ needs.ai-review-check-finish.outputs.published_head_sha }}
+          REVIEWED_HEAD_SHA: >-
+            ${{ needs.ai-review-check-finish.outputs.published_head_sha
+            || needs.ai-review-check-start.outputs.head_sha }}
           REPOSITORY_TIER: ${{ steps.tier.outputs.tier }}
           FINAL_VERDICT: >-
             ${{ needs.resolve-context.outputs.review_override_actor == ''
-            && needs.ai-review-check-finish.outputs.final_verdict || 'overridden' }}
+            && (needs.ai-review-check-finish.outputs.final_verdict
+            || needs.ai-review-check-start.outputs.reused_verdict) || 'overridden' }}
         run: |
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
