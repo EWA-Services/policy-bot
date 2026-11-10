@@ -74,7 +74,7 @@ approval_rules:
         count: 1
     requires: &approval_requirements_3
       count: 1
-      users: [jai, poom, Sunn-y-Arora, flkas]
+      users: [jai, poom, Sunn-y-Arora, flkas, vikastharyani32]
       conditions:
         has_valid_signatures: true
         has_status:
