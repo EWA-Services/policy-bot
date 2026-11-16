@@ -101,12 +101,16 @@ func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent,
 			continue
 		}
 
-		// Cheap pre-check: skip the full evaluation when the policy on the
-		// PR's base branch cannot possibly be affected by this check_run.
-		// Covers three known-terminal cases: no `.policy.yml` at all,
+		// Cheap pre-check: skip the full evaluation when no policy that can
+		// apply to the PR can be affected by this check_run. A stacked PR
+		// uses its stack base's policy. A PR without stack data uses its
+		// base branch's policy, plus the default branch's policy when it
+		// targets another branch, because it may still be stacked. Each
+		// policy must be in a known-terminal case: no `.policy.yml` at all,
 		// policy has no `has_status` blocks, or the check name isn't
-		// listed. Each skip saves 3-5 GitHub API calls. Fails open in
-		// every uncertain case (load/parse error, empty identifiers).
+		// listed. Each skip saves a full evaluation. Fails open in every
+		// uncertain case (load/parse error, empty identifiers, unknown
+		// default branch).
 		baseBranch := pr.GetBase().GetRef()
 		policyBranches := policyBranchesForSkip(pr, repo.GetDefaultBranch())
 		if skipForEveryBranch(policyBranches, func(branch string) bool {

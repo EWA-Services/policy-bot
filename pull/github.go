@@ -299,8 +299,10 @@ func (ghc *GitHubContext) IsDraft() bool {
 	return ghc.pr.IsDraft
 }
 
-// Branches returns the names of the base and head branch. If the head branch
-// is from another repository (it is a fork) then the branch name is
+// Branches returns the names of the base and head branch. For a pull request
+// in a GitHub stack, the base is the stack's base branch rather than the
+// branch the pull request directly targets. If the head branch is from
+// another repository (it is a fork) then the branch name is
 // `owner:branchName`.
 func (ghc *GitHubContext) Branches() (base string, head string) {
 	base = ghc.pr.BaseRefName

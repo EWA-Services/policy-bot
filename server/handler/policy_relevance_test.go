@@ -367,7 +367,7 @@ func TestPolicyBranchesForSkip(t *testing.T) {
 			name:          "unknown default branch",
 			pr:            pullRequest("main", ""),
 			defaultBranch: "",
-			want:          []string{"main", ""},
+			want:          nil,
 		},
 	}
 

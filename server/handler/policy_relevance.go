@@ -24,6 +24,9 @@ func policyBranchesForSkip(pr *github.PullRequest, defaultBranch string) []strin
 	if stackBase := pr.GetStack().GetBase().GetRef(); stackBase != "" {
 		return []string{stackBase}
 	}
+	if defaultBranch == "" {
+		return nil
+	}
 	base := pr.GetBase().GetRef()
 	if base == defaultBranch {
 		return []string{base}
