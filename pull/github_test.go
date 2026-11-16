@@ -461,6 +461,57 @@ func TestCrossRepoBranches(t *testing.T) {
 	assert.Equal(t, "testorg2:test-branch", head, "cross-repo head branch was not correctly set")
 }
 
+func TestStackedBranchesUseStackBase(t *testing.T) {
+	rp := &ResponsePlayer{}
+
+	stackedPr := defaultTestPR()
+	stackedPr.Base.Ref = new("parent-branch")
+	stackedPr.Stack = &github.PullRequestStack{
+		Base: &github.PullRequestStackBase{Ref: "develop"},
+	}
+
+	ctx := makeContext(t, rp, stackedPr, nil)
+
+	base, head := ctx.Branches()
+	assert.Equal(t, "develop", base, "stacked base branch was not the stack base")
+	assert.Equal(t, "test-branch", head, "stacked head branch was not correctly set")
+}
+
+func TestStackedBranchesLoadMissingStack(t *testing.T) {
+	rp := &ResponsePlayer{}
+	rule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.stack"),
+		"testdata/responses/pull_stacked.yml",
+	)
+
+	stackedPr := defaultTestPR()
+	stackedPr.Base.Ref = new("parent-branch")
+
+	ctx := makeContext(t, rp, stackedPr, nil)
+
+	base, head := ctx.Branches()
+	assert.Equal(t, "develop", base, "loaded base branch was not the stack base")
+	assert.Equal(t, "test-branch", head, "loaded head branch was not correctly set")
+	assert.Equal(t, 1, rule.Count, "pull request was not loaded to find its stack")
+}
+
+func TestUnstackedBranchesKeepBase(t *testing.T) {
+	rp := &ResponsePlayer{}
+	rule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.stack"),
+		"testdata/responses/pull_not_stacked.yml",
+	)
+
+	unstackedPr := defaultTestPR()
+	unstackedPr.Base.Ref = new("release-branch")
+
+	ctx := makeContext(t, rp, unstackedPr, nil)
+
+	base, _ := ctx.Branches()
+	assert.Equal(t, "release-branch", base, "unstacked base branch was changed")
+	assert.Equal(t, 1, rule.Count, "pull request was not loaded to check for a stack")
+}
+
 func TestCollaboratorPermission(t *testing.T) {
 	rp := &ResponsePlayer{}
 	rule := rp.AddRule(
@@ -776,7 +827,8 @@ func defaultTestPR() *github.PullRequest {
 				Owner: &github.User{
 					Login: new("testorg"),
 				},
-				Name: new("testrepo"),
+				Name:          new("testrepo"),
+				DefaultBranch: new("develop"),
 			},
 		},
 		ChangedFiles: new(1),

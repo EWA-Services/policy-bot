@@ -17,6 +17,7 @@ package handler
 import (
 	"testing"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/palantir/policy-bot/policy"
 	"github.com/palantir/policy-bot/policy/approval"
 	"github.com/palantir/policy-bot/policy/disapproval"
@@ -327,4 +328,61 @@ func TestCollectStatusNames_OnlyDisapproval(t *testing.T) {
 	names, hasAny := policyStatusNames(cfg)
 	assert.True(t, hasAny)
 	assert.Contains(t, names, "never-ready")
+}
+
+func TestPolicyBranchesForSkip(t *testing.T) {
+	pullRequest := func(base string, stackBase string) *github.PullRequest {
+		pr := &github.PullRequest{Base: &github.PullRequestBranch{Ref: new(base)}}
+		if stackBase != "" {
+			pr.Stack = &github.PullRequestStack{Base: &github.PullRequestStackBase{Ref: stackBase}}
+		}
+		return pr
+	}
+
+	tests := []struct {
+		name          string
+		pr            *github.PullRequest
+		defaultBranch string
+		want          []string
+	}{
+		{
+			name:          "pull request to the default branch",
+			pr:            pullRequest("main", ""),
+			defaultBranch: "main",
+			want:          []string{"main"},
+		},
+		{
+			name:          "stacked pull request uses the stack base",
+			pr:            pullRequest("parent-branch", "main"),
+			defaultBranch: "main",
+			want:          []string{"main"},
+		},
+		{
+			name:          "pull request to another branch without stack data",
+			pr:            pullRequest("parent-branch", ""),
+			defaultBranch: "main",
+			want:          []string{"parent-branch", "main"},
+		},
+		{
+			name:          "unknown default branch",
+			pr:            pullRequest("main", ""),
+			defaultBranch: "",
+			want:          []string{"main", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, policyBranchesForSkip(test.pr, test.defaultBranch))
+		})
+	}
+}
+
+func TestSkipForEveryBranch(t *testing.T) {
+	skippable := map[string]bool{"main": true, "parent-branch": true}
+	skip := func(branch string) bool { return skippable[branch] }
+
+	assert.True(t, skipForEveryBranch([]string{"main", "parent-branch"}, skip))
+	assert.False(t, skipForEveryBranch([]string{"parent-branch", "release"}, skip))
+	assert.False(t, skipForEveryBranch(nil, skip))
 }

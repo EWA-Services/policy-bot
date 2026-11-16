@@ -102,11 +102,15 @@ func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRun
 		// isn't listed. Each skip saves 3-5 GitHub API calls. Fails open
 		// in every uncertain case (load/parse error, empty identifiers).
 		baseBranch := pr.GetBase().GetRef()
-		if h.shouldSkipWorkflowRun(ctx, installationID, ownerName, repoName, baseBranch, workflowPath) {
+		policyBranches := policyBranchesForSkip(pr, repo.GetDefaultBranch())
+		if skipForEveryBranch(policyBranches, func(branch string) bool {
+			return h.shouldSkipWorkflowRun(ctx, installationID, ownerName, repoName, branch, workflowPath)
+		}) {
 			logger.Info().
 				Str("workflow_path", workflowPath).
 				Str("workflow_name", workflowName).
 				Str("base_branch", baseBranch).
+				Strs("policy_branches", policyBranches).
 				Int("pr_number", pr.GetNumber()).
 				Msg("Skipping workflow_run evaluation: not policy-relevant")
 			continue

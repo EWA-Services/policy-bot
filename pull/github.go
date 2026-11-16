@@ -73,6 +73,7 @@ func (loc Locator) IsComplete() bool {
 	case loc.Value.GetHead().GetRepo().GetName() == "":
 	case loc.Value.GetHead().GetRepo().GetOwner().GetLogin() == "":
 	case loc.Value.GetChangedFiles() == 0:
+	case loc.Value.GetStack() == nil && loc.Value.GetBase().GetRef() != loc.Value.GetBase().GetRepo().GetDefaultBranch():
 	default:
 		return true
 	}
@@ -112,6 +113,9 @@ func (loc Locator) toV4(ctx context.Context, client *githubv4.Client) (*v4PullRe
 	v4.BaseRepository.DatabaseID = loc.Value.GetBase().GetRepo().GetID()
 	v4.IsDraft = loc.Value.GetDraft()
 	v4.ChangedFiles = loc.Value.GetChangedFiles()
+	if stackBase := loc.Value.GetStack().GetBase().GetRef(); stackBase != "" {
+		v4.Stack = &v4PullRequestStack{BaseRefName: stackBase}
+	}
 	return &v4, nil
 }
 
@@ -300,6 +304,9 @@ func (ghc *GitHubContext) IsDraft() bool {
 // `owner:branchName`.
 func (ghc *GitHubContext) Branches() (base string, head string) {
 	base = ghc.pr.BaseRefName
+	if ghc.pr.Stack != nil && ghc.pr.Stack.BaseRefName != "" {
+		base = ghc.pr.Stack.BaseRefName
+	}
 	head = ghc.pr.HeadRefName
 	if ghc.pr.IsCrossRepository {
 		head = ghc.pr.HeadRepository.Owner.Login + ":" + head
@@ -1144,7 +1151,13 @@ type v4PullRequest struct {
 		DatabaseID int64
 	}
 
+	Stack *v4PullRequestStack
+
 	ChangedFiles int
+}
+
+type v4PullRequestStack struct {
+	BaseRefName string
 }
 
 type v4PageInfo struct {

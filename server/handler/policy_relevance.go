@@ -15,9 +15,30 @@
 package handler
 
 import (
+	"github.com/google/go-github/v92/github"
 	"github.com/palantir/policy-bot/policy"
 	"github.com/palantir/policy-bot/policy/predicate"
 )
+
+func policyBranchesForSkip(pr *github.PullRequest, defaultBranch string) []string {
+	if stackBase := pr.GetStack().GetBase().GetRef(); stackBase != "" {
+		return []string{stackBase}
+	}
+	base := pr.GetBase().GetRef()
+	if base == defaultBranch {
+		return []string{base}
+	}
+	return []string{base, defaultBranch}
+}
+
+func skipForEveryBranch(branches []string, skip func(branch string) bool) bool {
+	for _, branch := range branches {
+		if !skip(branch) {
+			return false
+		}
+	}
+	return len(branches) > 0
+}
 
 // policyStatusNames returns the union of all status check names referenced by
 // `has_status` and `has_successful_status` predicates anywhere in the policy:

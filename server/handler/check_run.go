@@ -108,10 +108,14 @@ func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent,
 		// listed. Each skip saves 3-5 GitHub API calls. Fails open in
 		// every uncertain case (load/parse error, empty identifiers).
 		baseBranch := pr.GetBase().GetRef()
-		if h.shouldSkipCheckRun(ctx, installationID, ownerName, repoName, baseBranch, checkName) {
+		policyBranches := policyBranchesForSkip(pr, repo.GetDefaultBranch())
+		if skipForEveryBranch(policyBranches, func(branch string) bool {
+			return h.shouldSkipCheckRun(ctx, installationID, ownerName, repoName, branch, checkName)
+		}) {
 			logger.Info().
 				Str("check_name", checkName).
 				Str("base_branch", baseBranch).
+				Strs("policy_branches", policyBranches).
 				Int("pr_number", pr.GetNumber()).
 				Msg("Skipping check_run evaluation: not policy-relevant")
 			continue
