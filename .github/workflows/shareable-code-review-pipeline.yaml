@@ -166,7 +166,7 @@ jobs:
           - Mention `@finn-codex` in a PR comment or inline thread to ask a question
           - An authorized approver can comment exactly `/ai-review-override` to accept the current PR head without another AI inspection
           - Comment exactly `/ai-review-breaker-reset` to resume a paused AI review:
-            - Art or Bhargav can reset after 5 or fewer decisive AI reviews
+            - Art, Avinash, or Vikas can reset after 5 or fewer decisive AI reviews
             - Poom can reset after 10 or fewer decisive AI reviews
             - Jai can reset at any review count
 
