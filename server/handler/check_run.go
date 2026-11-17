@@ -101,17 +101,15 @@ func (h *CheckRun) processEvent(ctx context.Context, event github.CheckRunEvent,
 			continue
 		}
 
-		// Cheap pre-check: skip the full evaluation when the policy on the
-		// PR's base branch cannot possibly be affected by this check_run.
-		// Covers three known-terminal cases: no `.policy.yml` at all,
-		// policy has no `has_status` blocks, or the check name isn't
-		// listed. Each skip saves 3-5 GitHub API calls. Fails open in
-		// every uncertain case (load/parse error, empty identifiers).
 		baseBranch := pr.GetBase().GetRef()
-		if h.shouldSkipCheckRun(ctx, installationID, ownerName, repoName, baseBranch, checkName) {
+		policyBranches := policyBranchesForSkip(pr, repo.GetDefaultBranch())
+		if skipForEveryBranch(policyBranches, func(branch string) bool {
+			return h.shouldSkipCheckRun(ctx, installationID, ownerName, repoName, branch, checkName)
+		}) {
 			logger.Info().
 				Str("check_name", checkName).
 				Str("base_branch", baseBranch).
+				Strs("policy_branches", policyBranches).
 				Int("pr_number", pr.GetNumber()).
 				Msg("Skipping check_run evaluation: not policy-relevant")
 			continue
