@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.43.2-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.43.1-finn.1...v1.43.2-finn.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* Evaluate stacked PRs against the stack's base branch [ENG-3510] ([#80](https://github.com/EWA-Services/policy-bot/issues/80)) ([9bd9185](https://github.com/EWA-Services/policy-bot/commit/9bd918531dba86c4db62bc8dd8a9aa637e0a650d))
+
 ## [1.43.1-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.43.0-finn.1...v1.43.1-finn.1) (2026-10-29)
 
 
