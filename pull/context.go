@@ -83,8 +83,10 @@ type Context interface {
 	// HeadSHA returns the SHA of the head commit of the pull request.
 	HeadSHA() string
 
-	// Branches returns the base (also known as target) and head branch names
-	// of this pull request. Branches in this repository have no prefix, while
+	// Branches returns the base and head branch names of this pull request.
+	// For a pull request in a GitHub stack, base is the stack's base branch,
+	// not the branch the pull request directly targets. Otherwise, base is the
+	// target branch. Branches in this repository have no prefix, while
 	// branches in forks are prefixed with the owner of the fork and a colon.
 	// The base branch will always be unprefixed.
 	Branches() (base string, head string)

@@ -41,13 +41,13 @@ func TestCheckRunProcessEvent(t *testing.T) {
 		prNumber       = 42
 	)
 
-	newHandler := func(policyCheckName string) *CheckRun {
+	newBranchHandler := func(policyCheckNames map[string]string) *CheckRun {
 		return &CheckRun{
 			Base: Base{
 				ClientCreator: stubClientCreator{},
 				ConfigFetcher: &ConfigFetcher{
 					Loader: mockConfigLoader{
-						loadConfig: func(_ context.Context, _ *github.Client, _, _, _ string) (appconfig.Config, error) {
+						loadConfig: func(_ context.Context, _ *github.Client, _, _, ref string) (appconfig.Config, error) {
 							return appconfig.Config{
 								Content: []byte(`
 policy:
@@ -58,12 +58,12 @@ approval_rules:
     if:
       has_status:
         statuses:
-          - "` + policyCheckName + `"
+          - "` + policyCheckNames[ref] + `"
         conclusions: ["success"]
     requires:
       count: 0
 `),
-								Source: owner + "/" + repo + "@" + baseBranch,
+								Source: owner + "/" + repo + "@" + ref,
 								Path:   ".policy.yml",
 							}, nil
 						},
@@ -72,6 +72,9 @@ approval_rules:
 				},
 			},
 		}
+	}
+	newHandler := func(policyCheckName string) *CheckRun {
+		return newBranchHandler(map[string]string{baseBranch: policyCheckName})
 	}
 
 	newEvent := func(action, conclusion, eventCheckName string) github.CheckRunEvent {
@@ -93,9 +96,10 @@ approval_rules:
 				},
 			},
 			Repo: &github.Repository{
-				ID:    github.Ptr(repoID),
-				Name:  github.Ptr(repo),
-				Owner: &github.User{Login: github.Ptr(owner)},
+				ID:            github.Ptr(repoID),
+				Name:          github.Ptr(repo),
+				Owner:         &github.User{Login: github.Ptr(owner)},
+				DefaultBranch: github.Ptr(baseBranch),
 			},
 			Installation: &github.Installation{ID: github.Ptr(installationID)},
 		}
@@ -179,6 +183,29 @@ approval_rules:
 		require.NoError(t, err)
 
 		assert.Zero(t, evaluations)
+	})
+
+	t.Run("uses the default branch policy for a pull request that may be stacked", func(t *testing.T) {
+		h := newBranchHandler(map[string]string{baseBranch: "Required Check", "parent-branch": "Parent Check"})
+
+		for _, test := range []struct {
+			checkName string
+			expected  int
+		}{
+			{checkName: "Required Check", expected: 1},
+			{checkName: "Parent Check", expected: 1},
+			{checkName: "Unrelated Check", expected: 0},
+		} {
+			evaluations := 0
+			event := newEvent("completed", "failure", test.checkName)
+			event.CheckRun.PullRequests[0].Base.Ref = github.Ptr("parent-branch")
+			err := h.processEvent(context.Background(), event, func(context.Context, int64, common.Trigger, pull.Locator) error {
+				evaluations++
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, evaluations, test.checkName)
+		}
 	})
 }
 

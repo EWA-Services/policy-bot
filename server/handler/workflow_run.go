@@ -95,18 +95,16 @@ func (h *WorkflowRun) processEvent(ctx context.Context, event github.WorkflowRun
 			continue
 		}
 
-		// Cheap pre-check: skip the full evaluation when the policy on the
-		// PR's base branch cannot possibly be affected by this workflow_run.
-		// Covers three known-terminal cases: no `.policy.yml` at all,
-		// policy has no `has_workflow_result` blocks, or the workflow path
-		// isn't listed. Each skip saves 3-5 GitHub API calls. Fails open
-		// in every uncertain case (load/parse error, empty identifiers).
 		baseBranch := pr.GetBase().GetRef()
-		if h.shouldSkipWorkflowRun(ctx, installationID, ownerName, repoName, baseBranch, workflowPath) {
+		policyBranches := policyBranchesForSkip(pr, repo.GetDefaultBranch())
+		if skipForEveryBranch(policyBranches, func(branch string) bool {
+			return h.shouldSkipWorkflowRun(ctx, installationID, ownerName, repoName, branch, workflowPath)
+		}) {
 			logger.Info().
 				Str("workflow_path", workflowPath).
 				Str("workflow_name", workflowName).
 				Str("base_branch", baseBranch).
+				Strs("policy_branches", policyBranches).
 				Int("pr_number", pr.GetNumber()).
 				Msg("Skipping workflow_run evaluation: not policy-relevant")
 			continue

@@ -73,6 +73,7 @@ func (loc Locator) IsComplete() bool {
 	case loc.Value.GetHead().GetRepo().GetName() == "":
 	case loc.Value.GetHead().GetRepo().GetOwner().GetLogin() == "":
 	case loc.Value.GetChangedFiles() == 0:
+	case loc.Value.GetStack() == nil && loc.Value.GetBase().GetRef() != loc.Value.GetBase().GetRepo().GetDefaultBranch():
 	default:
 		return true
 	}
@@ -112,6 +113,9 @@ func (loc Locator) toV4(ctx context.Context, client *githubv4.Client) (*v4PullRe
 	v4.BaseRepository.DatabaseID = loc.Value.GetBase().GetRepo().GetID()
 	v4.IsDraft = loc.Value.GetDraft()
 	v4.ChangedFiles = loc.Value.GetChangedFiles()
+	if stackBase := loc.Value.GetStack().GetBase().GetRef(); stackBase != "" {
+		v4.Stack = &v4PullRequestStack{BaseRefName: stackBase}
+	}
 	return &v4, nil
 }
 
@@ -294,11 +298,16 @@ func (ghc *GitHubContext) IsDraft() bool {
 	return ghc.pr.IsDraft
 }
 
-// Branches returns the names of the base and head branch. If the head branch
-// is from another repository (it is a fork) then the branch name is
+// Branches returns the names of the base and head branch. For a pull request
+// in a GitHub stack, the base is the stack's base branch rather than the
+// branch the pull request directly targets. If the head branch is from
+// another repository (it is a fork) then the branch name is
 // `owner:branchName`.
 func (ghc *GitHubContext) Branches() (base string, head string) {
 	base = ghc.pr.BaseRefName
+	if ghc.pr.Stack != nil && ghc.pr.Stack.BaseRefName != "" {
+		base = ghc.pr.Stack.BaseRefName
+	}
 	head = ghc.pr.HeadRefName
 	if ghc.pr.IsCrossRepository {
 		head = ghc.pr.HeadRepository.Owner.Login + ":" + head
@@ -1168,7 +1177,13 @@ type v4PullRequest struct {
 		DatabaseID int64
 	}
 
+	Stack *v4PullRequestStack
+
 	ChangedFiles int
+}
+
+type v4PullRequestStack struct {
+	BaseRefName string
 }
 
 type v4PageInfo struct {

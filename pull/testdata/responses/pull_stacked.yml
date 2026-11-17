@@ -1,0 +1,34 @@
+- status: 200
+  body: |
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "login": "mhaypenny"
+            },
+            "title": "test title",
+            "createdAt": "2020-09-30T17:42:10Z",
+            "state": "OPEN",
+            "isCrossRepository": false,
+            "isDraft": false,
+            "headRefOid": "e05fcae367230ee709313dd2720da527d178ce43",
+            "headRefName": "test-branch",
+            "headRepository": {
+              "name": "testrepo",
+              "owner": {
+                "login": "testorg"
+              }
+            },
+            "baseRefName": "parent-branch",
+            "baseRepository": {
+              "databaseId": 1234
+            },
+            "stack": {
+              "baseRefName": "develop"
+            },
+            "changedFiles": 1
+          }
+        }
+      }
+    }

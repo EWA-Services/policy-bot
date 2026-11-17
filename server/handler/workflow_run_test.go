@@ -280,6 +280,53 @@ approval_rules:
 	}
 }
 
+func TestWorkflowRunSkipChecksDefaultBranchPolicy(t *testing.T) {
+	policies := map[string]string{"main": ".github/workflows/main.yml", "parent-branch": ".github/workflows/parent.yml"}
+	h := &WorkflowRun{Base: Base{ClientCreator: stubClientCreator{}, ConfigFetcher: &ConfigFetcher{
+		Loader: mockConfigLoader{loadConfig: func(_ context.Context, _ *github.Client, _, _, ref string) (appconfig.Config, error) {
+			return appconfig.Config{Content: []byte(`
+policy:
+  approval: [CI]
+approval_rules:
+  - name: CI
+    requires:
+      count: 0
+      conditions:
+        has_workflow_result:
+          workflows: [` + policies[ref] + `]
+          conclusions: [success]
+`), Source: "testorg/testrepo@" + ref, Path: ".policy.yml"}, nil
+		}}, SeenPolicyCache: NewSeenPolicyCache(),
+	}}}
+
+	for _, test := range []struct {
+		name     string
+		base     string
+		workflow string
+		expected int
+	}{
+		{name: "skips an unlisted workflow for the default branch", base: "main", workflow: ".github/workflows/parent.yml", expected: 0},
+		{name: "evaluates a workflow listed by the default branch policy", base: "parent-branch", workflow: ".github/workflows/main.yml", expected: 1},
+		{name: "evaluates a workflow listed by the base branch policy", base: "parent-branch", workflow: ".github/workflows/parent.yml", expected: 1},
+		{name: "skips a workflow neither policy lists", base: "parent-branch", workflow: ".github/workflows/other.yml", expected: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			event := github.WorkflowRunEvent{
+				Action: github.Ptr("completed"), Installation: &github.Installation{ID: github.Ptr(int64(1))},
+				Repo:        &github.Repository{ID: github.Ptr(int64(2)), Name: github.Ptr("testrepo"), Owner: &github.User{Login: github.Ptr("testorg")}, DefaultBranch: github.Ptr("main")},
+				WorkflowRun: &github.WorkflowRun{Path: github.Ptr(test.workflow), HeadSHA: github.Ptr("same-head"), PullRequests: []*github.PullRequest{{Number: github.Ptr(42), Base: &github.PullRequestBranch{Ref: github.Ptr(test.base), Repo: &github.Repository{ID: github.Ptr(int64(2))}}}}},
+			}
+			err := h.processEvent(context.Background(), event, func(context.Context, int64, common.Trigger, pull.Locator) error {
+				calls++
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, calls)
+		})
+	}
+}
+
 func TestUnassociatedWorkflowLookupOnlyForPullRequests(t *testing.T) {
 	for _, kind := range []string{"push", "pull_request"} {
 		t.Run(kind, func(t *testing.T) {
