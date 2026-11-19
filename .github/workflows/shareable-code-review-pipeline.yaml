@@ -412,7 +412,7 @@ jobs:
         run: python3 ewa-actions/scripts/code_review/code_review_progress.py
 
   codex-direct-cli:
-    name: ${{ format('{0} V{1} code review', inputs.review_engine == 'claude' && 'Claude' || 'Codex', inputs.review_version) }}
+    name: ${{ format('{0} {1} code review', inputs.review_engine == 'claude' && 'Claude' || 'Codex', inputs.review_version == 'AGENT_RESOURCES_V1' && inputs.review_version || format('V{0}', inputs.review_version)) }}
     needs:
       - resolve-context
       - ai-review-check-start
@@ -550,6 +550,7 @@ jobs:
           sparse-checkout: |
             /skills/finn-pr-review/
             /skills/finn-coding-standards/
+            /skills/skillify/
           sparse-checkout-cone-mode: false
           token: ${{ secrets.FINN_DEVOPS_PERSONAL_ACCESS_TOKEN }}
           persist-credentials: false
@@ -629,8 +630,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.codex-github-token.outputs.token }}
           REVIEW_STACK_CONTEXT_PATH: ${{ runner.temp }}/review-v2-artifacts/stack-context.json
-          # Only the Claude reviews have the comment filter, so only they collect PR comments.
-          REVIEW_PR_COMMENTS_PATH: ${{ inputs.review_engine == 'claude' && format('{0}/review-v2-artifacts/pr-comments.json', runner.temp) || '' }}
+          REVIEW_PR_COMMENTS_PATH: ${{ inputs.review_engine == 'claude' && env.AI_REVIEW_VERSION != 'AGENT_RESOURCES_V1' && format('{0}/review-v2-artifacts/pr-comments.json', runner.temp) || '' }}
         run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_stack_context.py"
 
       - name: Collect Linear ticket description
@@ -642,7 +642,7 @@ jobs:
         run: python3 "${RUNNER_TEMP}/scripts/code_review/code_review_ticket_context.py"
 
       - name: Filter PR comments for the judge
-        if: needs.resolve-context.outputs.reply_required != 'true' && inputs.review_engine == 'claude'
+        if: needs.resolve-context.outputs.reply_required != 'true' && inputs.review_engine == 'claude' && env.AI_REVIEW_VERSION != 'AGENT_RESOURCES_V1'
         # The judge reads comments only from a file the filter marked ok; a failed step removes the file.
         continue-on-error: true
         env:
@@ -838,6 +838,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        needs.resolve-context.outputs.review_version != 'AGENT_RESOURCES_V1' &&
         needs.codex-direct-cli.result == 'success' &&
         (
           needs.codex-direct-cli.outputs.verdict == 'REQUEST_CHANGES' ||
@@ -1015,7 +1016,7 @@ jobs:
       REVIEW_INVOCATION_ID: ${{ needs.codex-direct-cli.outputs.review_invocation_id }}
       REVIEW_DIFF_SIGNATURE: ${{ needs.ai-review-check-start.outputs.diff_signature }}
       REVIEW_HEAD_SHA: ${{ needs.ai-review-check-start.outputs.head_sha }}
-      JEV_ENABLED: ${{ secrets.TYPESAFE_API_KEY != '' && needs.resolve-context.outputs.review_version != '1' }}
+      JEV_ENABLED: ${{ secrets.TYPESAFE_API_KEY != '' && needs.resolve-context.outputs.review_version != '1' && needs.resolve-context.outputs.review_version != 'AGENT_RESOURCES_V1' }}
       INCREMENT_SHA256: ${{ needs.codex-direct-cli.outputs.increment_sha256 }}
       OPEN_FINDINGS_SHA256: ${{ needs.codex-direct-cli.outputs.open_findings_sha256 }}
       BASELINE_REVIEW_ID: ${{ needs.codex-direct-cli.outputs.baseline_review_id }}
