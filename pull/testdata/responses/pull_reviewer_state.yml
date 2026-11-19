@@ -1,0 +1,96 @@
+- status: 200
+  body: |
+    {
+      "errors": [],
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "headRefOid": "head",
+            "reviewRequests": {
+              "pageInfo": {
+                "endCursor": null,
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "requested-user"
+                  }
+                },
+                {
+                  "requestedReviewer": {
+                    "__typename": "Team",
+                    "slug": "requested-team"
+                  }
+                }
+              ]
+            },
+            "timelineItems": {
+              "pageInfo": {
+                "endCursor": null,
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "__typename": "ReviewRequestedEvent",
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "previously-requested-user"
+                  }
+                },
+                {
+                  "__typename": "ReviewRequestRemovedEvent",
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "removed-user"
+                  }
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "endCursor": null,
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "late-approver"
+                  },
+                  "state": "APPROVED",
+                  "body": "",
+                  "submittedAt": "2018-06-27T20:40:00Z",
+                  "lastEditedAt": "2018-06-27T20:40:00Z",
+                  "commit": {
+                    "oid": "head"
+                  },
+                  "onBehalfOf": {
+                    "nodes": [
+                      {
+                        "slug": "review-team"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "author": {
+                    "login": "old-reviewer"
+                  },
+                  "state": "COMMENTED",
+                  "body": "",
+                  "submittedAt": "2018-06-27T20:30:00Z",
+                  "lastEditedAt": "2018-06-27T20:30:00Z",
+                  "commit": {
+                    "oid": "old-head"
+                  },
+                  "onBehalfOf": {
+                    "nodes": []
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }

@@ -205,6 +205,102 @@ func TestReviews(t *testing.T) {
 	assert.Equal(t, 2, dataRule.Count, "cached reviews were not used")
 }
 
+func TestReviewerAssignmentBlockers(t *testing.T) {
+	rp := &ResponsePlayer{}
+	historyRule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.reviewRequests"),
+		"testdata/responses/pull_reviewer_state.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil)
+
+	blockers, err := ctx.ReviewerAssignmentBlockers()
+	require.NoError(t, err)
+	assert.Equal(t, []*Reviewer{
+		{Type: ReviewerUser, Name: "requested-user"},
+		{Type: ReviewerTeam, Name: "requested-team"},
+		{Type: ReviewerUser, Name: "previously-requested-user"},
+		{Type: ReviewerUser, Name: "removed-user"},
+		{Type: ReviewerUser, Name: "late-approver"},
+		{Type: ReviewerTeam, Name: "review-team"},
+	}, blockers)
+	assert.Equal(t, 1, historyRule.Count, "reviewer assignment blockers were not loaded in one GraphQL read")
+}
+
+func TestReviewerAssignmentBlockersPaginatesIndependently(t *testing.T) {
+	rp := &ResponsePlayer{}
+	matcher := &recordingRequestMatcher{
+		matcher: GraphQLNodePrefixMatcher("repository.pullRequest.reviewRequests"),
+	}
+	historyRule := rp.AddRule(
+		matcher,
+		"testdata/responses/pull_reviewer_state_paged.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil)
+
+	blockers, err := ctx.ReviewerAssignmentBlockers()
+	require.NoError(t, err)
+	assert.Equal(t, []*Reviewer{
+		{Type: ReviewerUser, Name: "request-page-1"},
+		{Type: ReviewerUser, Name: "timeline-page-1"},
+		{Type: ReviewerUser, Name: "review-page-1"},
+		{Type: ReviewerUser, Name: "request-page-2"},
+		{Type: ReviewerUser, Name: "review-page-2"},
+		{Type: ReviewerUser, Name: "review-page-3"},
+	}, blockers)
+	assert.Equal(t, 3, historyRule.Count)
+	require.Len(t, matcher.bodies, 3)
+	assertGraphQLVariables(t, matcher.bodies[1], map[string]any{
+		"requestCursor":  "request-1",
+		"timelineCursor": "timeline-1",
+		"reviewCursor":   "review-1",
+	})
+	assertGraphQLVariables(t, matcher.bodies[2], map[string]any{
+		"requestCursor":  "request-2",
+		"timelineCursor": "timeline-1",
+		"reviewCursor":   "review-2",
+	})
+}
+
+func TestReviewerAssignmentBlockersRejectsHeadChange(t *testing.T) {
+	rp := &ResponsePlayer{}
+	rule := rp.AddRule(
+		GraphQLNodePrefixMatcher("repository.pullRequest.reviewRequests"),
+		"testdata/responses/pull_reviewer_head_change.yml",
+	)
+
+	ctx := makeContext(t, rp, nil, nil)
+	_, err := ctx.ReviewerAssignmentBlockers()
+
+	require.EqualError(t, err, "pull request head changed while loading reviewer assignment blockers")
+	assert.Equal(t, 2, rule.Count)
+}
+
+type recordingRequestMatcher struct {
+	matcher RequestMatcher
+	bodies  [][]byte
+}
+
+func (m *recordingRequestMatcher) Matches(request *http.Request, body []byte) bool {
+	if !m.matcher.Matches(request, body) {
+		return false
+	}
+	m.bodies = append(m.bodies, append([]byte(nil), body...))
+	return true
+}
+
+func assertGraphQLVariables(t *testing.T, body []byte, expected map[string]any) {
+	t.Helper()
+	var request struct {
+		Variables map[string]any `json:"variables"`
+	}
+	require.NoError(t, json.Unmarshal(body, &request))
+	for name, value := range expected {
+		assert.Equal(t, value, request.Variables[name], name)
+	}
+}
+
 func TestNoReviews(t *testing.T) {
 	rp := &ResponsePlayer{}
 	dataRule := rp.AddRule(

@@ -39,8 +39,9 @@ type EvalContext struct {
 	Options   *PullEvaluationOptions
 	PublicURL string
 
-	PullContext pull.Context
-	Config      FetchedConfig
+	PullContext      pull.Context
+	Config           FetchedConfig
+	ReviewerRequests *ReviewerRequestCoordinator
 
 	// If true, store statuses in the Status field instead of posting them to
 	// GitHub. Only the last status is saved, so when this option is enabled,

@@ -1,0 +1,46 @@
+- status: 200
+  body: |
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "headRefOid": "old-head",
+            "reviewRequests": {
+              "pageInfo": {"endCursor": "request-1", "hasNextPage": true},
+              "nodes": []
+            },
+            "timelineItems": {
+              "pageInfo": {"endCursor": "timeline-1", "hasNextPage": false},
+              "nodes": []
+            },
+            "reviews": {
+              "pageInfo": {"endCursor": "review-1", "hasNextPage": false},
+              "nodes": []
+            }
+          }
+        }
+      }
+    }
+- status: 200
+  body: |
+    {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "headRefOid": "new-head",
+            "reviewRequests": {
+              "pageInfo": {"endCursor": null, "hasNextPage": false},
+              "nodes": []
+            },
+            "timelineItems": {
+              "pageInfo": {"endCursor": null, "hasNextPage": false},
+              "nodes": []
+            },
+            "reviews": {
+              "pageInfo": {"endCursor": null, "hasNextPage": false},
+              "nodes": []
+            }
+          }
+        }
+      }
+    }

@@ -162,16 +162,12 @@ func TestSelectionDifference(t *testing.T) {
 				Teams: []string{"team-b", "team-c"},
 			},
 		},
-		"dismissedUsers": {
+		"historicalUsers": {
 			Input: Selection{
 				Users: []string{"a", "b", "c"},
 			},
 			Reviewers: []*pull.Reviewer{
-				{
-					Type:    pull.ReviewerUser,
-					Name:    "a",
-					Removed: true,
-				},
+				{Type: pull.ReviewerUser, Name: "a"},
 				{
 					Type: pull.ReviewerUser,
 					Name: "c",
@@ -181,7 +177,7 @@ func TestSelectionDifference(t *testing.T) {
 				Users: []string{"b"},
 			},
 		},
-		"dismissedTeams": {
+		"historicalTeams": {
 			Input: Selection{
 				Teams: []string{"team-a", "team-b", "team-c"},
 			},
@@ -190,11 +186,7 @@ func TestSelectionDifference(t *testing.T) {
 					Type: pull.ReviewerTeam,
 					Name: "team-a",
 				},
-				{
-					Type:    pull.ReviewerTeam,
-					Name:    "team-c",
-					Removed: true,
-				},
+				{Type: pull.ReviewerTeam, Name: "team-c"},
 			},
 			Output: Selection{
 				Teams: []string{"team-b"},
