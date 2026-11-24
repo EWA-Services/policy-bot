@@ -23,8 +23,10 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
+	"github.com/palantir/policy-bot/policy/common"
 	"github.com/palantir/policy-bot/policy/reviewer"
 	"github.com/palantir/policy-bot/pull"
 	"github.com/palantir/policy-bot/pull/pulltest"
@@ -181,6 +183,70 @@ func TestReconcileReviewRequestsFailsClosedOnInitialReadError(t *testing.T) {
 
 	assert.ErrorIs(t, err, blockersError)
 	assert.Empty(t, requests.all())
+}
+
+func TestRequestReviewsDoesNotDriftWhenEarlierRuleCompletes(t *testing.T) {
+	collaborators := []*pull.Collaborator{
+		{Name: "lead-a"}, {Name: "lead-b"}, {Name: "lead-c"},
+		{Name: "primary-a"}, {Name: "primary-b"},
+		{Name: "second-a"}, {Name: "second-b"}, {Name: "second-c"},
+	}
+	leadRule := &common.Result{
+		Name:     "lead approval",
+		Status:   common.StatusPending,
+		Requires: common.RequiresResult{Count: 1},
+		ReviewRequestRule: &common.ReviewRequestRule{
+			Users:          []string{"lead-a", "lead-b", "lead-c"},
+			RequestedCount: 1,
+			Mode:           common.RequestModeRandomUsers,
+		},
+	}
+	primaryRule := &common.Result{
+		Name:     "primary approval",
+		Status:   common.StatusPending,
+		Requires: common.RequiresResult{Count: 1},
+		ReviewRequestRule: &common.ReviewRequestRule{
+			Users:          []string{"primary-a", "primary-b"},
+			RequestedCount: 1,
+			Mode:           common.RequestModeRandomUsers,
+		},
+	}
+	secondRule := &common.Result{
+		Name:     "second approval",
+		Status:   common.StatusPending,
+		Requires: common.RequiresResult{Count: 1},
+		ReviewRequestRule: &common.ReviewRequestRule{
+			Users:          []string{"second-a", "second-b", "second-c"},
+			RequestedCount: 1,
+			Mode:           common.RequestModeRandomUsers,
+		},
+	}
+
+	baseTime := time.Date(2026, 11, 23, 14, 24, 0, 0, time.UTC)
+	for offset := 0; offset < 20; offset++ {
+		prctx := newReviewerBlockerContext(nil)
+		prctx.AuthorValue = "author"
+		prctx.CreatedAtValue = baseTime.Add(time.Duration(offset) * time.Second)
+		prctx.CollaboratorsValue = collaborators
+
+		client, requests := newReviewerRequestClient(t, http.StatusCreated)
+		ec := newReviewerEvalContext(client, prctx)
+
+		require.NoError(t, ec.requestReviews(context.Background(), []*common.Result{leadRule, primaryRule, secondRule}))
+		require.Len(t, requests.all(), 1)
+		initialReviewers := requests.all()[0].Body.Reviewers
+		require.Len(t, initialReviewers, 3)
+
+		blockers := make([]*pull.Reviewer, 0, len(initialReviewers))
+		for _, user := range initialReviewers {
+			blockers = append(blockers, &pull.Reviewer{Type: pull.ReviewerUser, Name: user})
+		}
+		prctx.results = append(prctx.results, reviewerBlockerResult{blockers: blockers})
+
+		// Simulate lead rule completing while primary + second remain pending on checks.
+		require.NoError(t, ec.requestReviews(context.Background(), []*common.Result{primaryRule, secondRule}))
+		assert.Len(t, requests.all(), 1, "offset=%d: completing an earlier rule must not request additional reviewers", offset)
+	}
 }
 
 type reviewerBlockerContext struct {

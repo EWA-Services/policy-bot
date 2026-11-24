@@ -220,7 +220,6 @@ func TestRandomlyOrderUsers(t *testing.T) {
 }
 
 func TestSelectReviewers(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "users",
@@ -244,7 +243,7 @@ func TestSelectReviewers(t *testing.T) {
 
 	prctx := makeContext()
 
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Len(t, selection.Users, 3, "policy should request three people")
 	require.Contains(t, selection.Users, "review-approver", "at least review-approver must be selected")
@@ -254,7 +253,6 @@ func TestSelectReviewers(t *testing.T) {
 }
 
 func TestSelectRequestedReviewers(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "users",
@@ -269,7 +267,7 @@ func TestSelectRequestedReviewers(t *testing.T) {
 
 	prctx := makeContext()
 
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Len(t, selection.Users, 2, "policy should request two people")
 	require.Contains(t, selection.Users, "review-approver", "at least review-approver must be selected")
@@ -328,7 +326,7 @@ func TestSelectReviewersAccountsForMaintainedApprovals(t *testing.T) {
 				},
 			}
 
-			selection, err := SelectReviewers(context.Background(), makeContext(), results, rand.New(rand.NewSource(42)))
+			selection, err := SelectReviewers(context.Background(), makeContext(), results, 42)
 			require.NoError(t, err)
 			assert.Len(t, selection.Users, test.ExpectedCount)
 			for _, approver := range test.Approvers {
@@ -351,15 +349,63 @@ func TestSelectReviewersKeepsSeededSelectionAfterApproval(t *testing.T) {
 		},
 	}
 
-	first, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, rand.New(rand.NewSource(42)))
+	first, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, 42)
 	require.NoError(t, err)
 	require.Len(t, first.Users, 2)
 
 	for approvedIndex := range first.Users {
 		result.Requires.Approvers = []*common.Candidate{{User: first.Users[approvedIndex]}}
-		second, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, rand.New(rand.NewSource(42)))
+		second, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, 42)
 		require.NoError(t, err)
 		assert.Equal(t, []string{first.Users[1-approvedIndex]}, second.Users)
+	}
+}
+
+func TestSelectReviewersKeepsPerRuleSelectionWhenEarlierRuleCompletes(t *testing.T) {
+	leadRule := &common.Result{
+		Name:     "lead approval",
+		Status:   common.StatusPending,
+		Requires: common.RequiresResult{Count: 1},
+		ReviewRequestRule: &common.ReviewRequestRule{
+			Users:          []string{"review-approver", "contributor-committer", "maintainer"},
+			RequestedCount: 1,
+			Mode:           common.RequestModeRandomUsers,
+		},
+	}
+	primaryRule := &common.Result{
+		Name:     "primary approval",
+		Status:   common.StatusPending,
+		Requires: common.RequiresResult{Count: 1},
+		ReviewRequestRule: &common.ReviewRequestRule{
+			Users:          []string{"triager", "org-owner-team-maintainer", "direct-write-team-maintainer"},
+			RequestedCount: 1,
+			Mode:           common.RequestModeRandomUsers,
+		},
+	}
+	secondaryRule := &common.Result{
+		Name:     "secondary approval",
+		Status:   common.StatusPending,
+		Requires: common.RequiresResult{Count: 1},
+		ReviewRequestRule: &common.ReviewRequestRule{
+			Users:          []string{"comment-approver", "contributor-author", "user-team-write"},
+			RequestedCount: 1,
+			Mode:           common.RequestModeRandomUsers,
+		},
+	}
+
+	prctx := makeContext()
+	for seed := int64(1); seed <= 25; seed++ {
+		all, err := SelectReviewers(context.Background(), prctx, []*common.Result{leadRule, primaryRule, secondaryRule}, seed)
+		require.NoError(t, err)
+		require.Len(t, all.Users, 3)
+
+		afterLeadComplete, err := SelectReviewers(context.Background(), prctx, []*common.Result{primaryRule, secondaryRule}, seed)
+		require.NoError(t, err)
+		assert.Equal(t, all.Users[1:], afterLeadComplete.Users, "seed=%d: primary and secondary picks must not drift when lead drops out", seed)
+
+		onlySecondary, err := SelectReviewers(context.Background(), prctx, []*common.Result{secondaryRule}, seed)
+		require.NoError(t, err)
+		assert.Equal(t, all.Users[2:], onlySecondary.Users, "seed=%d: secondary pick must not drift when lead and primary drop out", seed)
 	}
 }
 
@@ -377,13 +423,12 @@ func TestSelectAllUsersExcludesMaintainedApprovers(t *testing.T) {
 		},
 	}
 
-	selection, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, rand.New(rand.NewSource(42)))
+	selection, err := SelectReviewers(context.Background(), makeContext(), []*common.Result{result}, 42)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"contributor-committer"}, selection.Users)
 }
 
 func TestSelectTeamReviewersKeepsEligibleTeamForRemainingApprovals(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "partially approved teams",
@@ -401,13 +446,12 @@ func TestSelectTeamReviewersKeepsEligibleTeamForRemainingApprovals(t *testing.T)
 		},
 	}
 
-	selection, err := SelectReviewers(context.Background(), makeContext(), results, r)
+	selection, err := SelectReviewers(context.Background(), makeContext(), results, 42)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"team-write"}, selection.Teams)
 }
 
 func TestSelectReviewers_UserPermission(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "user-permissions",
@@ -422,7 +466,7 @@ func TestSelectReviewers_UserPermission(t *testing.T) {
 
 	prctx := makeContext()
 
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Len(t, selection.Teams, 0, "policy should request no teams")
 
@@ -434,7 +478,6 @@ func TestSelectReviewers_UserPermission(t *testing.T) {
 }
 
 func TestSelectReviewers_TeamPermission(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "team-permissions",
@@ -448,7 +491,7 @@ func TestSelectReviewers_TeamPermission(t *testing.T) {
 
 	prctx := makeContext()
 
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Len(t, selection.Teams, 2, "policy should request two teams")
 	require.Contains(t, selection.Teams, "team-admin", "admin team seleted")
@@ -458,7 +501,6 @@ func TestSelectReviewers_TeamPermission(t *testing.T) {
 }
 
 func TestSelectReviewers_TeamMembers(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "team-users",
@@ -472,7 +514,7 @@ func TestSelectReviewers_TeamMembers(t *testing.T) {
 	}
 
 	prctx := makeContext()
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Empty(t, selection.Teams, "no teams should be returned")
 	require.Len(t, selection.Users, 1, "policy should request one reviewer")
@@ -480,7 +522,6 @@ func TestSelectReviewers_TeamMembers(t *testing.T) {
 }
 
 func TestSelectReviewers_Team(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "Team",
@@ -494,7 +535,7 @@ func TestSelectReviewers_Team(t *testing.T) {
 	}
 
 	prctx := makeContext()
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Len(t, selection.Teams, 1, "one team should be returned")
 	require.Contains(t, selection.Teams, "team-write", "team-write should be selected")
@@ -502,7 +543,6 @@ func TestSelectReviewers_Team(t *testing.T) {
 }
 
 func TestSelectReviewers_TeamNotCollaborator(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "not-collaborators",
@@ -516,14 +556,13 @@ func TestSelectReviewers_TeamNotCollaborator(t *testing.T) {
 	}
 
 	prctx := makeContext()
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Empty(t, selection.Teams, "no team should be returned")
 	require.Len(t, selection.Users, 0, "policy should request no people")
 }
 
 func TestSelectReviewers_Org(t *testing.T) {
-	r := rand.New(rand.NewSource(42))
 	results := []*common.Result{
 		{
 			Name:   "org",
@@ -537,7 +576,7 @@ func TestSelectReviewers_Org(t *testing.T) {
 	}
 
 	prctx := makeContext()
-	selection, err := SelectReviewers(context.Background(), prctx, results, r)
+	selection, err := SelectReviewers(context.Background(), prctx, results, 42)
 	require.NoError(t, err)
 	require.Len(t, selection.Users, 1, "policy should request one person")
 	require.Contains(t, selection.Users, "review-approver", "review-approver must be selected")

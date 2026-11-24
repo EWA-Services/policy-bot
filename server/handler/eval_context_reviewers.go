@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"math/rand"
 	"net/http"
 	"slices"
 
@@ -54,11 +53,10 @@ func (ec *EvalContext) requestReviewsForResult(ctx context.Context, trigger comm
 func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result) error {
 	logger := zerolog.Ctx(ctx)
 
-	// Seed the random source with the PR creation time so that repeated
-	// evaluations produce the same set of reviewers. This is required to avoid
-	// duplicate requests on later evaluations.
-	r := rand.New(rand.NewSource(ec.PullContext.CreatedAt().UnixNano()))
-	selection, err := reviewer.SelectReviewers(ctx, ec.PullContext, reqs, r)
+	// Seed each rule from the PR creation time and rule name so repeated
+	// evaluations produce the same reviewers even when other rules complete.
+	seed := ec.PullContext.CreatedAt().UnixNano()
+	selection, err := reviewer.SelectReviewers(ctx, ec.PullContext, reqs, seed)
 	if err != nil {
 		return errors.Wrap(err, "failed to select reviewers")
 	}
