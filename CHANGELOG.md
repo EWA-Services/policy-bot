@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.43.3-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.43.2-finn.1...v1.43.3-finn.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* Assign each reviewer once per PR [ENG-3402] ([#68](https://github.com/EWA-Services/policy-bot/issues/68)) ([074ab6b](https://github.com/EWA-Services/policy-bot/commit/074ab6bcc8e473b6cc8a2e3701dea7dd8cb845cf))
+* Seed reviewer RNG per rule to stop multi-rule selection drift [ENG-3547] ([#84](https://github.com/EWA-Services/policy-bot/issues/84)) ([f99f467](https://github.com/EWA-Services/policy-bot/commit/f99f467aad131b60b28aee652d74eaeb45717425))
+
 ## [1.43.2-finn.1](https://github.com/EWA-Services/policy-bot/compare/v1.43.1-finn.1...v1.43.2-finn.1) (2026-11-17)
 
 
