@@ -16,7 +16,9 @@ package reviewer
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"slices"
 	"sort"
@@ -172,7 +174,16 @@ func getPossibleReviewers(
 	return possibleReviewers
 }
 
-func SelectReviewers(ctx context.Context, prctx pull.Context, results []*common.Result, r *rand.Rand) (Selection, error) {
+func ruleRand(baseSeed int64, ruleName string) *rand.Rand {
+	h := fnv.New64a()
+	var seedBytes [8]byte
+	binary.LittleEndian.PutUint64(seedBytes[:], uint64(baseSeed))
+	_, _ = h.Write(seedBytes[:])
+	_, _ = h.Write([]byte(ruleName))
+	return rand.New(rand.NewSource(int64(h.Sum64())))
+}
+
+func SelectReviewers(ctx context.Context, prctx pull.Context, results []*common.Result, seed int64) (Selection, error) {
 	selection := Selection{}
 
 	for _, child := range results {
@@ -185,7 +196,7 @@ func SelectReviewers(ctx context.Context, prctx pull.Context, results []*common.
 				return selection, err
 			}
 		case common.RequestModeAllUsers, common.RequestModeRandomUsers:
-			if err := selectUserReviewers(childCtx, prctx, &selection, child, r); err != nil {
+			if err := selectUserReviewers(childCtx, prctx, &selection, child, ruleRand(seed, child.Name)); err != nil {
 				return selection, err
 			}
 		default:
