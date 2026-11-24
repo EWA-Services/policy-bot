@@ -229,7 +229,7 @@ func TestRequestReviewsDoesNotDriftWhenEarlierRuleCompletes(t *testing.T) {
 		prctx.CreatedAtValue = baseTime.Add(time.Duration(offset) * time.Second)
 		prctx.CollaboratorsValue = collaborators
 
-		client, requests := newReviewerRequestClient(t, http.StatusCreated)
+		client, requests := newReviewerRequestClient(t, http.StatusCreated, http.StatusCreated)
 		ec := newReviewerEvalContext(client, prctx)
 
 		require.NoError(t, ec.requestReviews(context.Background(), []*common.Result{leadRule, primaryRule, secondRule}))
@@ -243,7 +243,6 @@ func TestRequestReviewsDoesNotDriftWhenEarlierRuleCompletes(t *testing.T) {
 		}
 		prctx.results = append(prctx.results, reviewerBlockerResult{blockers: blockers})
 
-		// Simulate lead rule completing while primary + second remain pending on checks.
 		require.NoError(t, ec.requestReviews(context.Background(), []*common.Result{primaryRule, secondRule}))
 		assert.Len(t, requests.all(), 1, "offset=%d: completing an earlier rule must not request additional reviewers", offset)
 	}

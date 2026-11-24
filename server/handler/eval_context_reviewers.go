@@ -53,8 +53,6 @@ func (ec *EvalContext) requestReviewsForResult(ctx context.Context, trigger comm
 func (ec *EvalContext) requestReviews(ctx context.Context, reqs []*common.Result) error {
 	logger := zerolog.Ctx(ctx)
 
-	// Seed each rule from the PR creation time and rule name so repeated
-	// evaluations produce the same reviewers even when other rules complete.
 	seed := ec.PullContext.CreatedAt().UnixNano()
 	selection, err := reviewer.SelectReviewers(ctx, ec.PullContext, reqs, seed)
 	if err != nil {
